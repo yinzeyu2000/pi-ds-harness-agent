@@ -109,11 +109,22 @@ export class PiAgentDriver {
 					...errorFact,
 				});
 			} finally {
+				this.agent.clearAllQueues();
 				this.activeRunId = undefined;
 				this.abortRecordPromise = undefined;
 			}
 		}
 		if (failure !== undefined) throw failure;
+	}
+
+	steer(input: string | AgentMessage): void {
+		this.assertQueueable("steer");
+		this.agent.steer(normalizeQueuedMessage(input));
+	}
+
+	followUp(input: string | AgentMessage): void {
+		this.assertQueueable("follow up");
+		this.agent.followUp(normalizeQueuedMessage(input));
 	}
 
 	abort(): void {
@@ -127,6 +138,7 @@ export class PiAgentDriver {
 				runId: this.activeRunId,
 			})
 			.then(() => {});
+		this.agent.clearAllQueues();
 		this.agent.abort();
 	}
 
@@ -145,6 +157,11 @@ export class PiAgentDriver {
 		this.events.clear();
 	}
 
+	private assertQueueable(operation: string): void {
+		if (!this.activeRunId) throw new Error(`Cannot ${operation}: agent driver is idle`);
+		if (this.abortRequested) throw new Error(`Cannot ${operation}: agent driver is aborting`);
+	}
+
 	private async handleAgentEvent(event: AgentEvent): Promise<void> {
 		if (event.type === "message_end") {
 			const message = normalizeDurableMessage(event.message);
@@ -156,6 +173,12 @@ export class PiAgentDriver {
 		}
 		await this.events.emit("agent/event", event);
 	}
+}
+
+function normalizeQueuedMessage(input: string | AgentMessage): AgentMessage {
+	const message: AgentMessage =
+		typeof input === "string" ? { role: "user", content: input, timestamp: Date.now() } : input;
+	return normalizeDurableMessage(message);
 }
 
 function normalizeDurableMessage(message: AgentMessage): AgentMessage {

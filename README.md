@@ -30,7 +30,7 @@
 - write-before-publish 和纯函数 Projection Registry；
 - 确定性的 Profile / Bundle / Patch 组合器；
 - 带 monotonic guards 的基础工具流水线；
-- `PiAgentDriver` 与可恢复的 Minimal Headless Runtime；
+- `PiAgentDriver` 的 prompt、abort、steer、follow-up 控制契约与可恢复的 Minimal Headless Runtime；
 - Fake Model + 只读 Tool + Memory Session 的完整离线演示测试。
 
 ## 架构
@@ -72,7 +72,7 @@ npm test --workspace=@pi-ds/harness-runtime
 
 - 全仓 TypeScript、格式、依赖和浏览器打包检查通过；
 - 全仓离线构建通过；
-- Harness Runtime：5 个测试文件、12 个测试全部通过，且不依赖网络和 Shell；
+- Harness Runtime：6 个测试文件、14 个测试全部通过，且不依赖网络和 Shell；
 - Pi 上游完整测试在当前 Windows 环境中仍存在 Bash 自动发现、符号链接权限、Unix socket 和路径分隔符差异，详情见[基线测试记录](docs/baseline-results.md)。
 
 ## 文档
@@ -90,11 +90,10 @@ npm test --workspace=@pi-ds/harness-runtime
 
 接下来的重点是：
 
-1. 补齐 AgentDriver 的 abort、steer 和 follow-up 契约测试；
-2. 增加 JSONL Session 与恢复故障测试；
-3. 完成 Tool pre/guard/around/post/result 正式流水线；
-4. 增加 Approval、Prompt Contributor 和 Pi Models Provider；
-5. 在统一 Runtime 上逐步迁移 Coding Profile、CLI 与 TUI。
+1. 增加 JSONL Session 与恢复故障测试；
+2. 完成 Tool pre/guard/around/post/result 正式流水线；
+3. 增加 Approval、Prompt Contributor 和 Pi Models Provider；
+4. 在统一 Runtime 上逐步迁移 Coding Profile、CLI 与 TUI。
 
 完整阶段计划见 [`EXECUTION_PLAN.md`](EXECUTION_PLAN.md)。
 

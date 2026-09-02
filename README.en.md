@@ -30,7 +30,7 @@ This project is in early development. The first development batch includes the p
 - write-before-publish and a pure Projection Registry;
 - deterministic Profile / Bundle / Patch composition;
 - a basic tool pipeline with monotonic guards;
-- `PiAgentDriver` and a resumable Minimal Headless Runtime;
+- `PiAgentDriver` prompt, abort, steer, and follow-up contracts plus a resumable Minimal Headless Runtime;
 - an offline Fake Model + read-only Tool + Memory Session vertical test.
 
 ## Architecture
@@ -72,7 +72,7 @@ Pi generates its model catalog outside Git, so `hydrate:model-data` must run onc
 
 - Repository-wide TypeScript, formatting, dependency, and browser bundle checks pass.
 - The complete offline build passes.
-- Harness Runtime: 5 test files and 12 tests pass without network or shell access.
+- Harness Runtime: 6 test files and 14 tests pass without network or shell access.
 - The complete upstream Pi test suite still exposes Windows-specific differences around Bash discovery, symlink privileges, Unix sockets, and path separators. See the [baseline test record](docs/baseline-results.md).
 
 ## Documentation
@@ -90,11 +90,10 @@ Pi generates its model catalog outside Git, so `hydrate:model-data` must run onc
 
 The next priorities are:
 
-1. conformance coverage for AgentDriver abort, steer, and follow-up behavior;
-2. JSONL Session storage and crash-boundary recovery tests;
-3. the complete tool pre/guard/around/post/result pipeline;
-4. Approval, Prompt Contributor, and Pi Models Provider services;
-5. gradual migration of the Coding Profile, CLI, and TUI onto the unified Runtime.
+1. JSONL Session storage and crash-boundary recovery tests;
+2. the complete tool pre/guard/around/post/result pipeline;
+3. Approval, Prompt Contributor, and Pi Models Provider services;
+4. gradual migration of the Coding Profile, CLI, and TUI onto the unified Runtime.
 
 See [`EXECUTION_PLAN.md`](EXECUTION_PLAN.md) for the complete staged plan.
 
