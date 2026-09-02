@@ -1,0 +1,10 @@
+{
+	"id": "minimal",
+	"bundles": ["minimal"],
+	"plugins": [
+		{ "id": "session-memory", "plugin": "session-memory", "scope": "agent" },
+		{ "id": "tools", "plugin": "tools-static", "scope": "agent" },
+		{ "id": "prompt", "plugin": "prompt-static", "scope": "agent" },
+		{ "id": "driver", "plugin": "pi-agent-driver", "scope": "agent" }
+	]
+}
