@@ -31,6 +31,7 @@ This project is in early development. The first development batch includes the p
 - deterministic Profile / Bundle / Patch composition;
 - a basic tool pipeline with monotonic guards;
 - `PiAgentDriver` prompt, abort, steer, and follow-up contracts plus a resumable Minimal Headless Runtime;
+- injectable JSONL sessions, unfinished-operation classification, conservative resume, and unknown tool-effect blocking;
 - an offline Fake Model + read-only Tool + Memory Session vertical test.
 
 ## Architecture
@@ -72,7 +73,7 @@ Pi generates its model catalog outside Git, so `hydrate:model-data` must run onc
 
 - Repository-wide TypeScript, formatting, dependency, and browser bundle checks pass.
 - The complete offline build passes.
-- Harness Runtime: 6 test files and 14 tests pass without network or shell access.
+- Harness Runtime: 7 test files and 22 tests pass without network or shell access.
 - The complete upstream Pi test suite still exposes Windows-specific differences around Bash discovery, symlink privileges, Unix sockets, and path separators. See the [baseline test record](docs/baseline-results.md).
 
 ## Documentation
@@ -81,6 +82,7 @@ Pi generates its model catalog outside Git, so `hydrate:model-data` must run onc
 - [Upstream baseline](UPSTREAM_BASELINE.md)
 - [Architecture guardrails](docs/architecture.md)
 - [Event model](docs/event-model.md)
+- [M3 JSONL recovery handoff](docs/handoff-m3-jsonl-recovery.md)
 - [Source-port ledger](docs/source-port-ledger.md)
 - [ADR: one Session and Agent Loop](docs/adr/0001-single-session-and-agent-loop.md)
 - [ADR: PluginHost implementation](docs/adr/0002-plugin-host-implementation.md)
@@ -90,7 +92,7 @@ Pi generates its model catalog outside Git, so `hydrate:model-data` must run onc
 
 The next priorities are:
 
-1. JSONL Session storage and crash-boundary recovery tests;
+1. finish M3 reducer projections, request-configuration anchors, safe ToolStart recovery, and an explicit flush barrier;
 2. the complete tool pre/guard/around/post/result pipeline;
 3. Approval, Prompt Contributor, and Pi Models Provider services;
 4. gradual migration of the Coding Profile, CLI, and TUI onto the unified Runtime.

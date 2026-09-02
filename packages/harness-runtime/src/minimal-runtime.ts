@@ -29,6 +29,8 @@ export interface MinimalRuntimeOptions {
 	streamFn: StreamFn;
 	tools?: AgentTool[];
 	systemPrompt?: string;
+	/** Use a pre-opened durable session, such as a JsonlSessionRepo session. */
+	session?: Session;
 	sessionRepo?: InMemorySessionRepo;
 	sessionId?: string;
 }
@@ -41,12 +43,17 @@ export interface MinimalRuntime {
 }
 
 export async function createMinimalRuntime(options: MinimalRuntimeOptions): Promise<MinimalRuntime> {
+	if (options.session && (options.sessionRepo || options.sessionId)) {
+		throw new Error("session cannot be combined with sessionRepo or sessionId");
+	}
 	const host = new PluginHost();
-	const repo = options.sessionRepo ?? new InMemorySessionRepo();
+	const sessionConfig: SessionPluginConfig = options.session
+		? { session: options.session }
+		: { repo: options.sessionRepo ?? new InMemorySessionRepo(), sessionId: options.sessionId };
 	const specs: PluginSpec[] = [
 		{
 			plugin: sessionPlugin,
-			config: { repo, sessionId: options.sessionId },
+			config: sessionConfig,
 		},
 		{ plugin: toolsPlugin, config: options.tools ?? [] },
 		{ plugin: promptPlugin, config: options.systemPrompt ?? "You are a helpful assistant." },
@@ -61,9 +68,15 @@ export async function createMinimalRuntime(options: MinimalRuntimeOptions): Prom
 	};
 }
 
-const sessionPlugin: HarnessPlugin<{ repo: InMemorySessionRepo; sessionId?: string }> = {
+type SessionPluginConfig = { session: Session } | { repo: InMemorySessionRepo; sessionId?: string };
+
+const sessionPlugin: HarnessPlugin<SessionPluginConfig> = {
 	manifest: { id: "session-memory", version: "0.1.0", provides: [SESSION_SERVICE] },
 	async activate(context, config) {
+		if ("session" in config) {
+			context.provide(SESSION_SERVICE, config.session);
+			return;
+		}
 		const existing = config.sessionId
 			? (await config.repo.list()).find((metadata) => metadata.id === config.sessionId)
 			: undefined;

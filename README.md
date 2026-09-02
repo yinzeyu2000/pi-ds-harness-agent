@@ -31,6 +31,7 @@
 - 确定性的 Profile / Bundle / Patch 组合器；
 - 带 monotonic guards 的基础工具流水线；
 - `PiAgentDriver` 的 prompt、abort、steer、follow-up 控制契约与可恢复的 Minimal Headless Runtime；
+- 可注入 JSONL Session、未闭合 Operation 分类、保守 `resume` 和未知工具副作用拦截；
 - Fake Model + 只读 Tool + Memory Session 的完整离线演示测试。
 
 ## 架构
@@ -72,7 +73,7 @@ npm test --workspace=@pi-ds/harness-runtime
 
 - 全仓 TypeScript、格式、依赖和浏览器打包检查通过；
 - 全仓离线构建通过；
-- Harness Runtime：6 个测试文件、14 个测试全部通过，且不依赖网络和 Shell；
+- Harness Runtime：7 个测试文件、22 个测试全部通过，且不依赖网络和 Shell；
 - Pi 上游完整测试在当前 Windows 环境中仍存在 Bash 自动发现、符号链接权限、Unix socket 和路径分隔符差异，详情见[基线测试记录](docs/baseline-results.md)。
 
 ## 文档
@@ -81,6 +82,7 @@ npm test --workspace=@pi-ds/harness-runtime
 - [上游基线](UPSTREAM_BASELINE.md)
 - [架构约束](docs/architecture.md)
 - [事件模型](docs/event-model.md)
+- [M3 JSONL 恢复开发交接](docs/handoff-m3-jsonl-recovery.md)
 - [源码参考台账](docs/source-port-ledger.md)
 - [ADR：唯一 Session 与 Agent Loop](docs/adr/0001-single-session-and-agent-loop.md)
 - [ADR：插件宿主实现](docs/adr/0002-plugin-host-implementation.md)
@@ -90,7 +92,7 @@ npm test --workspace=@pi-ds/harness-runtime
 
 接下来的重点是：
 
-1. 增加 JSONL Session 与恢复故障测试；
+1. 完成 M3 的 Reducer Projection、请求配置锚点、ToolStart 安全恢复和显式 flush barrier；
 2. 完成 Tool pre/guard/around/post/result 正式流水线；
 3. 增加 Approval、Prompt Contributor 和 Pi Models Provider；
 4. 在统一 Runtime 上逐步迁移 Coding Profile、CLI 与 TUI。

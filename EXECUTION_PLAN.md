@@ -544,6 +544,13 @@ interface Profile {
 
 ### M3：Canonical Session、事件投影与恢复（8–12 天）
 
+当前进度（2026-09-03）：
+
+- 已允许 Minimal Runtime 注入预打开的 canonical Session，因此 Node 侧可直接接入 Pi `JsonlSessionRepo`，核心包不引入 Node 文件系统依赖。
+- 已识别 main lane 的未闭合 `run` Operation，并实现 `operation_start`、message tail、assistant terminal、abort 和 error 边界的基础 `resume`。
+- 未决 Tool Call 统一标记为 `outcome_unknown`，恢复过程不会调用模型或工具；损坏日志中的多个未闭合 Operation 会被拒绝。
+- 已增加真实 JSONL 重开和崩溃边界测试。Reducer Projection、请求配置锚点、`tool_started` 的 safe replay/reconciliation 和显式 flush barrier 仍待完成。
+
 任务：
 
 - 复用 Pi Entry/LaneRecord、Storage 和 Reducer。
