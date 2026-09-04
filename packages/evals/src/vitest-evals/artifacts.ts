@@ -106,7 +106,7 @@ export async function persistEvalArtifactReferences(
 			await mkdir(directory, { recursive: true, mode: 0o700 });
 			const path = join(directory, name);
 			await writeFile(path, attachment.body, { encoding: "utf8", mode: 0o600 });
-			references.push({ name, path: relative(artifactDirectory, path) });
+			references.push({ name, path: relative(artifactDirectory, path).replace(/\\/g, "/") });
 		}
 	}
 	return references;

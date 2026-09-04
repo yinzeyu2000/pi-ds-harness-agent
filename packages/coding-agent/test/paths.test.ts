@@ -11,6 +11,7 @@ import {
 	normalizeWindowsShellPath,
 	resolvePath,
 } from "../src/utils/paths.ts";
+import { supportsFileSymlinks } from "./platform-capabilities.ts";
 
 let tempDir: string;
 
@@ -34,7 +35,7 @@ describe("canonicalizePath", () => {
 		expect(canonicalizePath(file)).toBe(realpathSync(file));
 	});
 
-	it("resolves symlinks to their targets", () => {
+	it.skipIf(!supportsFileSymlinks)("resolves symlinks to their targets", () => {
 		const dir = createTempDir();
 		const target = join(dir, "target.txt");
 		const link = join(dir, "link.txt");
@@ -48,7 +49,7 @@ describe("canonicalizePath", () => {
 		const targetDir = join(dir, "target-dir");
 		const linkDir = join(dir, "link-dir");
 		mkdirSync(targetDir);
-		symlinkSync(targetDir, linkDir, "dir");
+		symlinkSync(targetDir, linkDir, process.platform === "win32" ? "junction" : "dir");
 		expect(canonicalizePath(linkDir)).toBe(realpathSync(targetDir));
 	});
 
@@ -58,7 +59,7 @@ describe("canonicalizePath", () => {
 		expect(canonicalizePath(nonexistent)).toBe(nonexistent);
 	});
 
-	it("falls back to the raw path for a dangling symlink", () => {
+	it.skipIf(!supportsFileSymlinks)("falls back to the raw path for a dangling symlink", () => {
 		const dir = createTempDir();
 		const target = join(dir, "target.txt");
 		const link = join(dir, "link.txt");

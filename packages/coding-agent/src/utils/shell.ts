@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
-import { delimiter, join } from "node:path";
-import { spawn, spawnSync } from "child_process";
+import { delimiter, dirname, join } from "node:path";
+import { spawnSync } from "child_process";
 import { getBinDir } from "../config.ts";
 
 export interface ShellConfig {
@@ -31,9 +31,14 @@ function findExecutableOnPath(executable: string): string | null {
 				windowsHide: true,
 			});
 			if (result.status === 0 && result.stdout) {
-				const firstMatch = result.stdout.trim().split(/\r?\n/)[0];
-				if (firstMatch && existsSync(firstMatch)) {
-					return firstMatch;
+				const matches = result.stdout.trim().split(/\r?\n/).filter(Boolean);
+				const preferred = matches.find((match) => existsSync(match) && !isLegacyWslBashPath(match));
+				if (preferred) {
+					return preferred;
+				}
+				const fallback = matches.find((match) => existsSync(match));
+				if (fallback) {
+					return fallback;
 				}
 			}
 		} catch {
@@ -55,6 +60,13 @@ function findExecutableOnPath(executable: string): string | null {
 		// Ignore errors
 	}
 	return null;
+}
+
+function findGitBashBesideGit(): string | null {
+	const git = findExecutableOnPath("git.exe");
+	if (!git) return null;
+	const candidate = join(dirname(dirname(git)), "bin", "bash.exe");
+	return existsSync(candidate) ? candidate : null;
 }
 
 /**
@@ -90,6 +102,8 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
 				return getBashShellConfig(path);
 			}
 		}
+		const installedGitBash = findGitBashBesideGit();
+		if (installedGitBash) return getBashShellConfig(installedGitBash);
 
 		// 3. Fallback: search bash.exe on PATH (Cygwin, MSYS2, WSL, etc.)
 		const bashOnPath = findExecutableOnPath("bash.exe");
@@ -215,19 +229,19 @@ export function killTrackedDetachedChildren(): void {
  */
 export function killProcessTree(pid: number): void {
 	if (process.platform === "win32") {
-		// Use the trusted System32 executable so cleanup does not depend on PATH.
+		// Wait for taskkill to finish. Returning while it is still walking the tree can
+		// leave the shell alive indefinitely, so callers waiting for its pipes never
+		// observe process termination.
 		try {
-			const child = spawn(
+			spawnSync(
 				join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"),
 				["/F", "/T", "/PID", String(pid)],
 				{
 					stdio: "ignore",
-					detached: true,
+					timeout: 5000,
 					windowsHide: true,
 				},
 			);
-			// A failed spawn emits "error" asynchronously; consume it to avoid crashing Node.
-			child.once("error", () => {});
 		} catch {
 			// Ignore errors if taskkill fails.
 		}

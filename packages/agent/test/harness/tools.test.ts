@@ -16,6 +16,7 @@ import {
 	type ShellExecOptions,
 } from "../../src/harness/types.ts";
 import { DEFAULT_MAX_LINES } from "../../src/harness/utils/truncate.ts";
+import { supportsFileSymlinks } from "../platform-capabilities.ts";
 import { createTempDir } from "./session-test-utils.ts";
 
 function textOutput(result: { content: Array<{ type: string; text?: string }> }): string {
@@ -404,7 +405,7 @@ describe("AgentHarness tools", () => {
 			expect(getOrThrow(await env.readTextFile("file.txt"))).toBe("ALPHA\nBETA\n");
 		});
 
-		it("serializes concurrent edits through canonical and symlink paths", async () => {
+		it.skipIf(!supportsFileSymlinks)("serializes concurrent edits through canonical and symlink paths", async () => {
 			const env = new SlowReadExecutionEnv({ cwd: createTempDir() });
 			getOrThrow(await env.writeFile("target.txt", "alpha\nbeta\ngamma\n"));
 			await symlink("target.txt", `${env.cwd}/link.txt`);
@@ -430,7 +431,7 @@ describe("AgentHarness tools", () => {
 			expect(getOrThrow(await env.readTextFile("target.txt"))).toBe("ALPHA\nBETA\ngamma\n");
 		});
 
-		it("edits regular files through symlinks", async () => {
+		it.skipIf(!supportsFileSymlinks)("edits regular files through symlinks", async () => {
 			const context = createContext();
 			getOrThrow(await context.env.writeFile("target.txt", "before\n"));
 			await symlink("target.txt", `${context.env.cwd}/link.txt`);
@@ -561,7 +562,7 @@ describe("AgentHarness tools", () => {
 					execution.cwd = turnContext.workspace;
 					execution.env = { PI_BASH_PREPARE_EXPLICIT: "explicit" };
 					execution.inheritEnv = false;
-					execution.command += `\nprintf '%s:%s:%s:%s' "$prefix" "\${PI_BASH_PREPARE_INHERITED-}" "$PI_BASH_PREPARE_EXPLICIT" "$PWD"`;
+					execution.command += `\nprintf '%s:%s:%s:' "$prefix" "\${PI_BASH_PREPARE_INHERITED-}" "$PI_BASH_PREPARE_EXPLICIT"; node -e 'process.stdout.write(process.cwd())'`;
 				},
 			});
 

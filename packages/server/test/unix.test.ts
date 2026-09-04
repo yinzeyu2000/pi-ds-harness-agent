@@ -39,7 +39,7 @@ afterEach(async () => {
 	tempDirectories.clear();
 });
 
-describe("Unix listener filesystem lifecycle", () => {
+describe.skipIf(process.platform === "win32")("Unix listener filesystem lifecycle", () => {
 	test("rejects a live listener without unlinking it", async () => {
 		const path = await makeSocketPath();
 		const first = makeServer(path);
@@ -113,5 +113,35 @@ describe("Unix listener filesystem lifecycle", () => {
 		const client = await connectUnixTestClient(path);
 		clients.add(client);
 		expect(await client.hello()).toMatchObject({ type: "hello" });
+	});
+});
+
+describe.runIf(process.platform === "win32")("Windows named-pipe lifecycle", () => {
+	test("maps a configured path to a stable named pipe and releases it on close", async () => {
+		const path = await makeSocketPath();
+		const first = makeServer(path);
+		await first.start();
+		const address = first.addresses[0];
+		expect(address).toMatch(/^\\\\\.\\pipe\\pi-[0-9a-f]{24}$/);
+
+		const client = await connectUnixTestClient(address!);
+		clients.add(client);
+		expect(await client.hello()).toMatchObject({ type: "hello" });
+		await client.close();
+		clients.delete(client);
+		await first.close();
+		servers.delete(first);
+
+		const restarted = makeServer(path);
+		await restarted.start();
+		expect(restarted.addresses[0]).toBe(address);
+	});
+
+	test("does not let two servers own the same mapped pipe", async () => {
+		const path = await makeSocketPath();
+		const first = makeServer(path);
+		await first.start();
+		const second = makeServer(path);
+		await expect(second.start()).rejects.toMatchObject({ code: "EADDRINUSE" });
 	});
 });

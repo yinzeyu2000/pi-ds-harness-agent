@@ -33,7 +33,7 @@ test("rejects Unix socket paths that cannot fit in sockaddr_un", () => {
 	expect(() => createUnixServer(service, { path: `/tmp/${"x".repeat(512)}` })).toThrow(/too long/);
 });
 
-test("rejects an overlong derived private Unix bind path", async () => {
+test.skipIf(process.platform === "win32")("rejects an overlong derived private Unix bind path", async () => {
 	const maxLength = process.platform === "linux" ? 107 : 103;
 	const suffixLength = Buffer.byteLength("/tmp//s");
 	const path = `/tmp/${"x".repeat(maxLength - suffixLength)}/s`;

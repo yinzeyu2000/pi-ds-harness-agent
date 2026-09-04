@@ -37,6 +37,7 @@ interface FileIdentity {
 class UnixListener implements PiServerListener {
 	private readonly options: ResolvedUnixListenerOptions;
 	private readonly path: string;
+	private readonly listenPath: string;
 	private readonly mode: number;
 	private readonly connections = new Set<UnixByteConnection>();
 	private server?: Server;
@@ -50,6 +51,7 @@ class UnixListener implements PiServerListener {
 	constructor(options: UnixListenerOptions) {
 		this.options = resolveUnixListenerOptions(options);
 		this.path = this.options.path;
+		this.listenPath = process.platform === "win32" ? resolveWindowsPipePath(this.path) : this.path;
 		this.mode = this.options.mode;
 	}
 
@@ -61,6 +63,20 @@ class UnixListener implements PiServerListener {
 		if (this.server) throw new Error("Unix listener is already started");
 		if (this.closing) throw new Error("Unix listener is closing or closed");
 		this.accept = accept;
+		if (process.platform === "win32") {
+			const server = createServer((socket) => this.acceptSocket(socket));
+			server.on("error", (error) => this.reportError(error));
+			this.server = server;
+			try {
+				await listen(server, this.listenPath);
+				this.boundPath = this.listenPath;
+			} catch (error) {
+				await closeNetServer(server, (closeError) => this.reportError(closeError));
+				this.server = undefined;
+				throw error;
+			}
+			return;
+		}
 
 		const ownedBindPath = getOwnedBindPath(this.path);
 		validateUnixSocketPath(ownedBindPath, "PiServer private Unix bind path");
@@ -72,19 +88,7 @@ class UnixListener implements PiServerListener {
 		server.on("error", (error) => this.reportError(error));
 		this.server = server;
 		try {
-			await new Promise<void>((resolve, reject) => {
-				const onError = (error: Error): void => {
-					server.off("listening", onListening);
-					reject(error);
-				};
-				const onListening = (): void => {
-					server.off("error", onError);
-					resolve();
-				};
-				server.once("error", onError);
-				server.once("listening", onListening);
-				server.listen(ownedBindPath);
-			});
+			await listen(server, ownedBindPath);
 			const stats = await lstat(ownedBindPath);
 			if (!stats.isSocket()) throw new Error(`Unix listener path is not a socket after binding: ${ownedBindPath}`);
 			this.socketIdentity = { dev: stats.dev, ino: stats.ino };
@@ -307,6 +311,28 @@ export class UnixByteConnection implements ByteConnection {
 function getOwnedBindPath(path: string): string {
 	const suffix = createHash("sha256").update(path).digest("hex").slice(0, 8);
 	return join(dirname(path), `.p-${suffix}`);
+}
+
+function resolveWindowsPipePath(path: string): string {
+	if (/^\\\\\.\\pipe\\/i.test(path)) return path;
+	const suffix = createHash("sha256").update(path).digest("hex").slice(0, 24);
+	return `\\\\.\\pipe\\pi-${suffix}`;
+}
+
+function listen(server: Server, path: string): Promise<void> {
+	return new Promise<void>((resolve, reject) => {
+		const onError = (error: Error): void => {
+			server.off("listening", onListening);
+			reject(error);
+		};
+		const onListening = (): void => {
+			server.off("error", onError);
+			resolve();
+		};
+		server.once("error", onError);
+		server.once("listening", onListening);
+		server.listen(path);
+	});
 }
 
 async function removeStaleSocket(path: string): Promise<void> {

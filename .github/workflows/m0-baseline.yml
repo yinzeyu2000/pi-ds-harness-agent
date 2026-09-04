@@ -1,0 +1,47 @@
+name: M0 baseline
+
+on:
+  push:
+    branches: [codex/m0-baseline]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-full-baseline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.20.0
+          cache: npm
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep
+          sudo ln -s "$(which fdfind)" /usr/local/bin/fd
+      - run: npm ci --ignore-scripts
+      - run: npm run hydrate:model-data
+      - run: npm run check
+      - run: npm run build:offline
+      - run: npm test
+      - run: node tools/architecture-guards/check-m0-baseline.mjs
+      - run: npx tsx scripts/m0-golden-traces.ts --check
+
+  windows-portability:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.20.0
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run hydrate:model-data
+      - name: Native Windows full baseline
+        shell: pwsh
+        run: ./scripts/run-baseline-windows.ps1 -Mode all
+      - run: node tools/architecture-guards/check-m0-baseline.mjs
+      - run: npx tsx scripts/m0-golden-traces.ts --check

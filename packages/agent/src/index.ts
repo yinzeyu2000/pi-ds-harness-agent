@@ -138,6 +138,9 @@ export * from "./harness/utils/shell-output.ts";
 export * from "./harness/utils/truncate.ts";
 // Proxy utilities
 export * from "./proxy.ts";
+// Runtime contracts and state machines
+export * as runtime from "./runtime/index.ts";
+export * from "./runtime/index.ts";
 export * from "./search/index.ts";
 // Stream defaults
 export { setDefaultStreamFn } from "./stream-fn.ts";

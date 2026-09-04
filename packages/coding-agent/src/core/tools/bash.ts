@@ -110,8 +110,19 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
 			if (child.pid) trackDetachedChildPid(child.pid);
 			let timedOut = false;
 			let timeoutHandle: NodeJS.Timeout | undefined;
+			const terminateChild = () => {
+				if (!child.pid) return;
+				killProcessTree(child.pid);
+				// taskkill can be unavailable or denied. Always close the direct shell so
+				// waitForChildProcess can finish even if a descendant retained its pipes.
+				try {
+					child.kill("SIGKILL");
+				} catch {
+					// Process already exited.
+				}
+			};
 			const onAbort = () => {
-				if (child.pid) killProcessTree(child.pid);
+				terminateChild();
 			};
 
 			try {
@@ -119,7 +130,7 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
 				if (timeoutMs !== undefined) {
 					timeoutHandle = setTimeout(() => {
 						timedOut = true;
-						if (child.pid) killProcessTree(child.pid);
+						terminateChild();
 					}, timeoutMs);
 				}
 				// Stream stdout and stderr.

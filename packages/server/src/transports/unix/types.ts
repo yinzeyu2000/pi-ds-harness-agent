@@ -2,6 +2,7 @@ import type { PiServerOptions } from "../../types.ts";
 
 export interface UnixListenerOptions {
 	path: string;
+	/** On Windows, a filesystem-like path is deterministically mapped to a named pipe. */
 	/** Socket filesystem permissions. Defaults to owner read/write only (0o600). */
 	mode?: number;
 	/** Maximum framed bytes queued per connection before a slow peer is disconnected. */

@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "piBaseline": "b8b873b9872db04a938fb4357b5e8e824ddc051c",
+  "traces": [
+    {
+      "name": "pure-conversation",
+      "eventTypes": [
+        "agent_start",
+        "turn_start",
+        "message_start",
+        "message_end",
+        "message_start",
+        "message_end",
+        "turn_end",
+        "agent_end"
+      ],
+      "messageRoles": ["user", "assistant"],
+      "assistantStopReasons": ["stop"],
+      "toolEndOrder": [],
+      "toolResultOrder": [],
+      "streamUpdates": []
+    },
+    {
+      "name": "single-tool",
+      "eventTypes": [
+        "agent_start",
+        "turn_start",
+        "message_start",
+        "message_end",
+        "message_start",
+        "message_end",
+        "tool_execution_start",
+        "tool_execution_end",
+        "message_start",
+        "message_end",
+        "turn_end",
+        "turn_start",
+        "message_start",
+        "message_end",
+        "turn_end",
+        "agent_end"
+      ],
+      "messageRoles": ["user", "assistant", "toolResult", "assistant"],
+      "assistantStopReasons": ["toolUse", "stop"],
+      "toolEndOrder": ["call-echo"],
+      "toolResultOrder": ["call-echo"],
+      "streamUpdates": []
+    },
+    {
+      "name": "parallel-multi-tool",
+      "eventTypes": [
+        "agent_start",
+        "turn_start",
+        "message_start",
+        "message_end",
+        "message_start",
+        "message_end",
+        "tool_execution_start",
+        "tool_execution_start",
+        "tool_execution_end",
+        "tool_execution_end",
+        "message_start",
+        "message_end",
+        "message_start",
+        "message_end",
+        "turn_end",
+        "turn_start",
+        "message_start",
+        "message_end",
+        "turn_end",
+        "agent_end"
+      ],
+      "messageRoles": ["user", "assistant", "toolResult", "toolResult", "assistant"],
+      "assistantStopReasons": ["toolUse", "stop"],
+      "toolEndOrder": ["call-fast", "call-slow"],
+      "toolResultOrder": ["call-slow", "call-fast"],
+      "streamUpdates": []
+    },
+    {
+      "name": "streaming-interrupt",
+      "eventTypes": [
+        "agent_start",
+        "turn_start",
+        "message_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "message_update",
+        "message_end",
+        "turn_end",
+        "agent_end"
+      ],
+      "messageRoles": ["user", "assistant"],
+      "assistantStopReasons": ["aborted"],
+      "toolEndOrder": [],
+      "toolResultOrder": [],
+      "streamUpdates": ["text_start", "text_delta"]
+    }
+  ]
+}

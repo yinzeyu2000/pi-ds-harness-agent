@@ -212,14 +212,15 @@ Content`,
 
 				mkdirSync(join(agentDir), { recursive: true });
 				mkdirSync(join(tempDir, ".pi"), { recursive: true });
-				symlinkSync(sharedExtensionsDir, join(agentDir, "extensions"), "dir");
-				symlinkSync(sharedSkillsDir, join(agentDir, "skills"), "dir");
-				symlinkSync(sharedPromptsDir, join(agentDir, "prompts"), "dir");
-				symlinkSync(sharedThemesDir, join(agentDir, "themes"), "dir");
-				symlinkSync(sharedExtensionsDir, join(tempDir, ".pi", "extensions"), "dir");
-				symlinkSync(sharedSkillsDir, join(tempDir, ".pi", "skills"), "dir");
-				symlinkSync(sharedPromptsDir, join(tempDir, ".pi", "prompts"), "dir");
-				symlinkSync(sharedThemesDir, join(tempDir, ".pi", "themes"), "dir");
+				const linkType = process.platform === "win32" ? "junction" : "dir";
+				symlinkSync(sharedExtensionsDir, join(agentDir, "extensions"), linkType);
+				symlinkSync(sharedSkillsDir, join(agentDir, "skills"), linkType);
+				symlinkSync(sharedPromptsDir, join(agentDir, "prompts"), linkType);
+				symlinkSync(sharedThemesDir, join(agentDir, "themes"), linkType);
+				symlinkSync(sharedExtensionsDir, join(tempDir, ".pi", "extensions"), linkType);
+				symlinkSync(sharedSkillsDir, join(tempDir, ".pi", "skills"), linkType);
+				symlinkSync(sharedPromptsDir, join(tempDir, ".pi", "prompts"), linkType);
+				symlinkSync(sharedThemesDir, join(tempDir, ".pi", "themes"), linkType);
 
 				const result = await packageManager.resolve();
 

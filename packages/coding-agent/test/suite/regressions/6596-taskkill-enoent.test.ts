@@ -1,13 +1,11 @@
-import type { ChildProcess } from "node:child_process";
-import { EventEmitter } from "node:events";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
+const { spawnSyncMock } = vi.hoisted(() => ({ spawnSyncMock: vi.fn() }));
 
 vi.mock("child_process", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("child_process")>();
-	return { ...actual, spawn: spawnMock };
+	return { ...actual, spawnSync: spawnSyncMock };
 });
 
 import { killProcessTree } from "../../../src/utils/shell.ts";
@@ -23,15 +21,16 @@ function withWindowsPlatform(test: () => void): void {
 }
 
 afterEach(() => {
-	spawnMock.mockReset();
+	spawnSyncMock.mockReset();
 });
 
 describe("issue #6596 taskkill spawn failures", () => {
-	it("uses System32 taskkill and consumes its asynchronous spawn error", () => {
-		const child = new EventEmitter() as ChildProcess;
+	it("uses System32 taskkill and tolerates a synchronous spawn error", () => {
 		const previousSystemRoot = process.env.SystemRoot;
 		process.env.SystemRoot = "C:\\CustomWindows";
-		spawnMock.mockReturnValue(child);
+		spawnSyncMock.mockImplementation(() => {
+			throw new Error("spawn taskkill ENOENT");
+		});
 
 		try {
 			withWindowsPlatform(() => {
@@ -42,11 +41,10 @@ describe("issue #6596 taskkill spawn failures", () => {
 			else process.env.SystemRoot = previousSystemRoot;
 		}
 
-		expect(spawnMock).toHaveBeenCalledWith(
+		expect(spawnSyncMock).toHaveBeenCalledWith(
 			join("C:\\CustomWindows", "System32", "taskkill.exe"),
 			["/F", "/T", "/PID", "1234"],
-			{ detached: true, stdio: "ignore", windowsHide: true },
+			{ stdio: "ignore", timeout: 5000, windowsHide: true },
 		);
-		expect(() => child.emit("error", new Error("spawn taskkill ENOENT"))).not.toThrow();
 	});
 });

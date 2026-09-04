@@ -15,7 +15,7 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import {
@@ -174,8 +174,25 @@ async function findBashOnPath(): Promise<string | null> {
 			? await runCommand("where", ["bash.exe"], 5000)
 			: await runCommand("which", ["bash"], 5000);
 	if (result.status !== 0 || !result.stdout) return null;
-	const firstMatch = result.stdout.trim().split(/\r?\n/)[0];
-	return firstMatch && (await pathExists(firstMatch)) ? firstMatch : null;
+	const matches = result.stdout.trim().split(/\r?\n/).filter(Boolean);
+	for (const match of matches) {
+		if (!isLegacyWslBashPath(match) && (await pathExists(match))) return match;
+	}
+	for (const match of matches) {
+		if (await pathExists(match)) return match;
+	}
+	return null;
+}
+
+async function findGitBashBesideGit(): Promise<string | null> {
+	if (process.platform !== "win32") return null;
+	const result = await runCommand("where", ["git.exe"], 5000);
+	if (result.status !== 0 || !result.stdout) return null;
+	for (const git of result.stdout.trim().split(/\r?\n/).filter(Boolean)) {
+		const candidate = join(dirname(dirname(git)), "bin", "bash.exe");
+		if (await pathExists(candidate)) return candidate;
+	}
+	return null;
 }
 
 interface ShellConfig {
@@ -211,6 +228,8 @@ async function getShellConfig(customShellPath?: string): Promise<Result<ShellCon
 				return ok(getBashShellConfig(candidate));
 			}
 		}
+		const installedGitBash = await findGitBashBesideGit();
+		if (installedGitBash) return ok(getBashShellConfig(installedGitBash));
 		const bashOnPath = await findBashOnPath();
 		if (bashOnPath) {
 			return ok(getBashShellConfig(bashOnPath));
