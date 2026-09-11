@@ -5,13 +5,17 @@
 
 ## 本批目标
 
-本批开始执行 `EXECUTION_PLAN.md` 的 M3，但不宣称 M3 已全部完成。实现范围是：
+本批完成 `EXECUTION_PLAN.md` 中 Minimal Runtime / main-lane `run` 的 M3 验收范围。实现包括：
 
 - 让 Minimal Runtime 使用调用方预打开的 Pi `Session`，包括 `JsonlSessionRepo`；
 - 在 Driver 启动时识别 main lane 的未闭合 Operation；
 - 为不会重复外部副作用的边界提供基础 `resume`；
 - 对未知工具副作用采取 fail-closed 策略；
 - 用真实 JSONL 文件重开模拟进程崩溃边界。
+- 在模型请求前持久化并 flush 版本化请求配置锚点；恢复时拒绝配置漂移。
+- 为 Memory、JSONL、SQLite 和 Session View 提供统一 `flush()` barrier。
+- 复用 Pi Reducer 建立 messages、turn-state、tool-state Projection，并验证重复 replay 与重开结果一致。
+- 在 Tool Body 前持久化 `tool_started` 和预留 ToolResult ID，按 `safe` / `never` 策略恢复。
 
 ## 关键实现
 
@@ -46,14 +50,16 @@ const runtime = await createMinimalRuntime({ session, streamFn });
 | assistant 以 stop/length 结束但缺少终态 | `settleable / completed` | 只补写 `operation_finished`，不调用模型 |
 | 已有 abort 请求或 assistant aborted | `settleable / aborted` | 只补写 aborted 终态 |
 | assistant error | `settleable / failed` | 只补写 failed 终态和错误事实 |
-| 存在未匹配的 Tool Call | `blocked / outcome_unknown` | 不调用模型、不执行工具、不闭合 Operation |
+| assistant Tool Call 后、`tool_started` 前 | `resumable / tool_batch` | 首次执行工具，不视为重放 |
+| `tool_started(replay: safe)` 后、ToolResult 前 | `resumable / tool_batch` | 重放工具并写入预留 Result ID |
+| `tool_started(replay: never)` 后、ToolResult 前 | `blocked / outcome_unknown` | 不调用模型、不执行工具、不闭合 Operation |
 | compaction/navigation、自定义尾部或不支持的起始快照 | `blocked / unsupported_operation` | 保留日志，等待后续恢复器处理 |
 
 当存在未闭合 Operation 时，新 `prompt()` 会抛出 `resume_required`，防止在同一 lane 产生第二个并发 Operation。
 
 ## 崩溃测试
 
-`packages/harness-runtime/test/jsonl-recovery.test.ts` 覆盖八个边界：
+`packages/harness-runtime/test/jsonl-recovery.test.ts` 覆盖十二个边界：
 
 1. 已完成会话重开；
 2. `operation_started` 后崩溃；
@@ -61,22 +67,22 @@ const runtime = await createMinimalRuntime({ session, streamFn });
 4. final assistant message 持久化后崩溃；
 5. abort 请求持久化后崩溃；
 6. assistant error 持久化后崩溃；
-7. Tool Call 持久化但 ToolResult 缺失；
-8. 旧日志中存在多个未闭合 Operation。
+7. 配置锚点与当前运行配置漂移；
+8. assistant Tool Call 已写入但 ToolStart 尚未写入；
+9. `replay: safe` ToolStart 已写入但 ToolResult 缺失；
+10. `replay: never` ToolStart 已写入但 ToolResult 缺失；
+11. ToolResult 已写入但 Operation 终态缺失；
+12. 旧日志中存在多个未闭合 Operation。
 
 所有模型和工具调用均为本地 faux 实现；测试会断言危险边界的调用次数为零。
 
-## 仍未完成的 M3 工作
+## 后续阶段承接
 
-- 复用 Pi Reducer 建立 messages、turn-state、tool-state Projection，并验证实时状态与 replay 深度相等；
-- 持久化请求配置锚点和 schemaVersion；
-- Driver 尚未写入 `tool_started`、queue 和 usage 事实；
-- 对 `replay: safe` 工具建立显式重放，对 `replay: never` 建立人工确认或 Provider reconciliation；
-- 对 canonical storage 暴露显式 `flush()` barrier；
-- 支持 compaction/navigation Operation 和非 main lane；
-- 处理 `initialMessages` 非空的通用 run 恢复。
+- M4 已完成：静态 `toolReplay` 已并入正式 Tool Catalog、Approval 与 Pipeline。
+- M4 已完成：queue 和 usage 事实已接入，`replay: never` 支持版本化 Provider reconciliation。
+- M6：支持 compaction/navigation Operation、非 main lane 和 `initialMessages` 非空的完整 AgentHarness 恢复。
 
-当前对未决工具一律返回 `outcome_unknown`。这是有意的保守限制，不应在没有 durable ToolStart 和幂等证据前放宽。
+`replay: never` 的已启动工具在未配置核对服务，或 Provider 返回 `unknown` 时仍保持 `outcome_unknown`。只有明确的 `completed` 或 `not_started` 核对结果可以解除阻断。
 
 ## 验证命令
 

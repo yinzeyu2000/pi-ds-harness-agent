@@ -289,6 +289,8 @@ export interface LogOptions {
 
 export interface SessionStorage<TMetadata extends SessionMetadata = SessionMetadata> {
 	getMetadata(): Promise<TMetadata>;
+	/** Waits until every previously accepted mutation has reached the backend's durability boundary. */
+	flush(): Promise<void>;
 
 	// Lanes
 	getLanes(): Promise<{ lane: string; leafId: string | null }[]>;
@@ -326,6 +328,8 @@ export interface SessionStorage<TMetadata extends SessionMetadata = SessionMetad
 }
 
 export interface SessionTree {
+	/** Waits until every previously accepted mutation has reached the backend's durability boundary. */
+	flush(): Promise<void>;
 	getLeafId(): Promise<string | null>;
 	getEntry(id: string): Promise<Entry | undefined>;
 	getStats(): Promise<SessionStats>;

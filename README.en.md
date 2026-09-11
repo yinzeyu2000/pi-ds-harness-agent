@@ -29,9 +29,23 @@ This project is in early development. The first development batch includes the p
 - separate Durable Facts, Live Events, and Capability Middleware semantics;
 - write-before-publish and a pure Projection Registry;
 - deterministic Profile / Bundle / Patch composition;
-- a basic tool pipeline with monotonic guards;
+- a fixed `pre/guard/approval/around/body/post/result` tool pipeline with headless fail-closed approval and structured stage errors;
+- an opt-in `--harness-runtime` print/JSON/RPC CLI, per-tool terminal or RPC approval, and explicit Extension factory loading;
+- one `CodingRuntimeController` and durable Projection shared by print, JSON, and strict JSONL RPC consumers;
+- RPC prompt/queue/abort/resume/compaction, Extension commands, runtime configuration, tree query/navigation, and graceful shutdown;
+- canonical session id/path/continue, image-bearing initial messages, and idle-time Tool/Model/thinking-level changes;
+- Extension commands, Agent/Tool lifecycle bindings, pre-commit message transforms, and recoverable initial inputs;
+- a scoped Tool Catalog with versioned policies included in recovery configuration anchors;
+- scoped Prompt Contributors and an ephemeral Prompt View that does not create conversation messages;
+- a Pi Models Provider with exact model selection and recovery-time model validation;
+- parallel tool completion decoupled from durable ToolResult ordering, which always follows model call order;
+- durable steer/follow-up queue facts, Assistant/Tool usage facts, and pending-queue restart recovery;
+- Provider reconciliation for non-idempotent tools, while unknown outcomes remain fail-closed;
 - `PiAgentDriver` prompt, abort, steer, and follow-up contracts plus a resumable Minimal Headless Runtime;
 - injectable JSONL sessions, unfinished-operation classification, conservative resume, and unknown tool-effect blocking;
+- versioned request-configuration anchors, recovery-time drift blocking, and one Memory/JSONL/SQLite `flush()` barrier;
+- Pi Reducer-backed messages, turn-state, and tool-state projections;
+- pre-body `tool_started` facts, stable ToolResult IDs, and `safe`/`never` recovery policies;
 - an offline Fake Model + read-only Tool + Memory Session vertical test.
 
 ## Architecture
@@ -73,7 +87,7 @@ Pi generates its model catalog outside Git, so `hydrate:model-data` must run onc
 
 - Repository-wide TypeScript, formatting, dependency, and browser bundle checks pass.
 - The complete offline build passes.
-- Harness Runtime: 7 test files and 22 tests pass without network or shell access.
+- Harness Runtime: 9 test files and 51 tests pass without network or shell access.
 - The complete upstream Pi test suite still exposes Windows-specific differences around Bash discovery, symlink privileges, Unix sockets, and path separators. See the [baseline test record](docs/baseline-results.md).
 
 ## Documentation
@@ -83,6 +97,10 @@ Pi generates its model catalog outside Git, so `hydrate:model-data` must run onc
 - [Architecture guardrails](docs/architecture.md)
 - [Event model](docs/event-model.md)
 - [M3 JSONL recovery handoff](docs/handoff-m3-jsonl-recovery.md)
+- [M4 Tool/Prompt/Models handoff](docs/handoff-m4-tool-pipeline.md)
+- [M5 plugin SDK and composition handoff](docs/handoff-m5-plugin-composition.md)
+- [M6 first Coding Runtime handoff](docs/handoff-m6-coding-runtime.md)
+- [Harness RPC protocol](docs/harness-rpc.md)
 - [Source-port ledger](docs/source-port-ledger.md)
 - [ADR: one Session and Agent Loop](docs/adr/0001-single-session-and-agent-loop.md)
 - [ADR: PluginHost implementation](docs/adr/0002-plugin-host-implementation.md)
@@ -92,10 +110,10 @@ Pi generates its model catalog outside Git, so `hydrate:model-data` must run onc
 
 The next priorities are:
 
-1. finish M3 reducer projections, request-configuration anchors, safe ToolStart recovery, and an explicit flush barrier;
-2. the complete tool pre/guard/around/post/result pipeline;
-3. Approval, Prompt Contributor, and Pi Models Provider services;
-4. gradual migration of the Coding Profile, CLI, and TUI onto the unified Runtime.
+1. make the TUI consume Harness Runtime and Projections without a second authoritative state;
+2. complete cross-file session switching, Fork, summarized tree navigation, and the remaining Extension compatibility boundaries;
+3. establish the legacy Pi CLI/RPC compatibility matrix and add protocol stress tests;
+4. extend Coding Profile crash-injection and real interactive end-to-end coverage.
 
 See [`EXECUTION_PLAN.md`](EXECUTION_PLAN.md) for the complete staged plan.
 

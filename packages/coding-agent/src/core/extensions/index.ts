@@ -5,8 +5,36 @@
 export type { SlashCommandInfo, SlashCommandSource } from "../slash-commands.ts";
 export type { SourceInfo } from "../source-info.ts";
 export {
+	createLegacyExtensionPlugin,
+	createLegacyExtensionSetPlugin,
+	LEGACY_EXTENSIONS_SERVICE,
+	type LegacyExtensionAdapterOptions,
+	type LegacyExtensionContribution,
+	type LegacyExtensionSetAdapterOptions,
+	type LegacyExtensionSetContribution,
+	type LegacyExtensionSetPlugin,
+	type LegacyExtensionSpec,
+} from "./harness-adapter.ts";
+export {
+	bindLegacyExtensionRuntimeActions,
+	type CodingRuntimeCommand,
+	createLegacyExtensionCommands,
+	type LegacyExtensionRuntimeBinding,
+	prepareLegacyExtensionRun,
+	runLegacyExtensionAfterTool,
+	runLegacyExtensionBeforeTool,
+	subscribeLegacyExtensionEvents,
+	transformLegacyExtensionMessageEnd,
+} from "./harness-bindings.ts";
+export {
+	type CreateHarnessExtensionContextsOptions,
+	createHarnessExtensionContexts,
+	type HarnessExtensionContextRuntime,
+} from "./harness-context.ts";
+export {
 	createExtensionRuntime,
 	discoverAndLoadExtensions,
+	importExtensionFactory,
 	loadExtensionFromFactory,
 	loadExtensions,
 } from "./loader.ts";
@@ -18,7 +46,7 @@ export type {
 	ShutdownHandler,
 	SwitchSessionHandler,
 } from "./runner.ts";
-export { ExtensionRunner } from "./runner.ts";
+export { ExtensionRunner, getNoOpExtensionUIContext } from "./runner.ts";
 export type {
 	AfterProviderResponseEvent,
 	AgentEndEvent,

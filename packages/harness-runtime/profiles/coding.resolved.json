@@ -1,0 +1,123 @@
+{
+  "schemaVersion": 1,
+  "profileId": "coding",
+  "plugins": [
+    {
+      "id": "session-jsonl",
+      "plugin": "session-jsonl",
+      "config": {
+        "format": "jsonl",
+        "recovery": "truncate-invalid-tail"
+      },
+      "enabled": true,
+      "scope": "agent",
+      "provides": ["pi-ds.session"],
+      "requires": []
+    },
+    {
+      "id": "tools",
+      "plugin": "tools-static",
+      "enabled": true,
+      "scope": "agent",
+      "provides": ["pi-ds.tools"],
+      "requires": []
+    },
+    {
+      "id": "coding-tools",
+      "plugin": "pi-coding-tools",
+      "enabled": true,
+      "scope": "agent",
+      "provides": [],
+      "requires": ["pi-ds.tools", "pi-ds.coding.approval"]
+    },
+    {
+      "id": "prompt",
+      "plugin": "prompt-contributors",
+      "enabled": true,
+      "scope": "agent",
+      "provides": ["pi-ds.prompt"],
+      "requires": []
+    },
+    {
+      "id": "models",
+      "plugin": "pi-models-provider",
+      "enabled": true,
+      "scope": "agent",
+      "provides": ["pi-ds.models"],
+      "requires": []
+    },
+    {
+      "id": "driver",
+      "plugin": "pi-agent-driver",
+      "enabled": true,
+      "scope": "agent",
+      "provides": ["pi-ds.agent-driver"],
+      "requires": ["pi-ds.session", "pi-ds.tools", "pi-ds.prompt", "pi-ds.models"]
+    },
+    {
+      "id": "coding-skills",
+      "plugin": "pi-coding-skills",
+      "enabled": true,
+      "scope": "agent",
+      "provides": [],
+      "requires": ["pi-ds.prompt"]
+    },
+    {
+      "id": "coding-compaction",
+      "plugin": "pi-coding-compaction",
+      "enabled": true,
+      "scope": "agent",
+      "provides": ["pi-ds.compaction"],
+      "requires": []
+    },
+    {
+      "id": "coding-approval",
+      "plugin": "pi-coding-approval",
+      "enabled": true,
+      "scope": "agent",
+      "provides": ["pi-ds.coding.approval"],
+      "requires": []
+    },
+    {
+      "id": "coding-telemetry",
+      "plugin": "pi-coding-telemetry",
+      "enabled": true,
+      "scope": "agent",
+      "provides": ["pi-ds.telemetry"],
+      "requires": []
+    },
+    {
+      "id": "legacy-extensions",
+      "plugin": "pi-legacy-extensions",
+      "enabled": true,
+      "scope": "agent",
+      "provides": ["pi-ds.coding.legacy-extensions"],
+      "requires": []
+    },
+    {
+      "id": "legacy-extension-bindings",
+      "plugin": "pi-legacy-extension-bindings",
+      "enabled": true,
+      "scope": "agent",
+      "provides": [
+        "pi-ds.message-commit-middleware",
+        "pi-ds.run-preparation-middleware",
+        "pi-ds.tool-lifecycle-middleware"
+      ],
+      "requires": [
+        "pi-ds.coding.legacy-extensions",
+        "pi-ds.tools",
+        "pi-ds.prompt",
+        "pi-ds.coding.approval"
+      ]
+    },
+    {
+      "id": "coding-ui",
+      "plugin": "pi-coding-ui",
+      "enabled": false,
+      "scope": "agent",
+      "provides": [],
+      "requires": ["pi-ds.session", "pi-ds.agent-driver", "pi-ds.coding.approval"]
+    }
+  ]
+}

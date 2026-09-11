@@ -398,6 +398,8 @@ export interface LoadSkillsOptions {
 	skillPaths: string[];
 	/** Include default skills directories. */
 	includeDefaults: boolean;
+	/** Include the cwd-local default skills directory. Defaults to true. */
+	includeProjectDefaults?: boolean;
 }
 
 /**
@@ -406,6 +408,7 @@ export interface LoadSkillsOptions {
  */
 export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 	const { agentDir, skillPaths, includeDefaults } = options;
+	const includeProjectDefaults = options.includeProjectDefaults ?? true;
 
 	// Resolve agentDir - if not provided, use default from config
 	const resolvedCwd = resolvePath(options.cwd);
@@ -449,7 +452,9 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 
 	if (includeDefaults) {
 		addSkills(loadSkillsFromDirInternal(join(resolvedAgentDir, "skills"), "user", true));
-		addSkills(loadSkillsFromDirInternal(resolve(resolvedCwd, CONFIG_DIR_NAME, "skills"), "project", true));
+		if (includeProjectDefaults) {
+			addSkills(loadSkillsFromDirInternal(resolve(resolvedCwd, CONFIG_DIR_NAME, "skills"), "project", true));
+		}
 	}
 
 	const userSkillsDir = join(resolvedAgentDir, "skills");

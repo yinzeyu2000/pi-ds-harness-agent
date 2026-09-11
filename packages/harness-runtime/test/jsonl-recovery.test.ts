@@ -10,9 +10,10 @@ import {
 	type StreamFn,
 } from "@earendil-works/pi-agent-core/node";
 import { type AssistantMessage, createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { createMinimalRuntime } from "../src/minimal-runtime.ts";
-import { PiAgentDriver, PiAgentRecoveryError } from "../src/pi-agent-driver.ts";
+import { PiAgentDriver, PiAgentRecoveryError, REQUEST_CONFIGURATION_CUSTOM_TYPE } from "../src/pi-agent-driver.ts";
 
 const tempDirectories: string[] = [];
 
@@ -76,6 +77,29 @@ async function startOperation(session: Session, runId: string, prompt: AgentMess
 	});
 }
 
+async function startAnchoredOperation(
+	session: Session,
+	runId: string,
+	prompt: AgentMessage,
+	systemPrompt: string,
+): Promise<void> {
+	const sourceLeafId = await session.appendCustomEntry(REQUEST_CONFIGURATION_CUSTOM_TYPE, {
+		schemaVersion: 1,
+		runId,
+		systemPrompt,
+		model: { provider: "unknown", id: "unknown" },
+		thinkingLevel: "off",
+		tools: [],
+	});
+	await session.appendRecord({
+		type: "operation_started",
+		id: runId,
+		lane: "main",
+		sourceLeafId,
+		intent: { kind: "run", originalPrompt: [prompt], initialMessages: [], systemPromptOverride: systemPrompt },
+	});
+}
+
 async function reopen(repo: JsonlSessionRepo, metadata: JsonlSessionMetadata): Promise<Session<JsonlSessionMetadata>> {
 	return repo.open(metadata);
 }
@@ -85,6 +109,29 @@ afterEach(() => {
 });
 
 describe("PiAgentDriver JSONL recovery", () => {
+	it("blocks recovery when the model-visible request configuration drifts", async () => {
+		const { cwd, repo } = createRepository();
+		const session = await repo.create({ id: "configuration-drift", cwd });
+		await startAnchoredOperation(session, "run-configuration-drift", userMessage("recover me"), "original");
+		const reopened = await reopen(repo, await session.getMetadata());
+		let requestCount = 0;
+		const runtime = await createMinimalRuntime({
+			session: reopened,
+			streamFn: responseStream("unexpected", () => requestCount++),
+			systemPrompt: "changed",
+		});
+
+		expect(await runtime.driver.getRecoveryState()).toMatchObject({
+			status: "blocked",
+			runId: "run-configuration-drift",
+			code: "configuration_mismatch",
+		});
+		await expect(runtime.driver.resume()).rejects.toMatchObject({ code: "configuration_mismatch" });
+		expect(requestCount).toBe(0);
+		expect(await reopened.findOpenOperations("main")).toHaveLength(1);
+		await runtime.dispose();
+	});
+
 	it("reopens a completed JSONL session without creating recovery work", async () => {
 		const { cwd, repo } = createRepository();
 		const session = await repo.create({ id: "completed", cwd });
@@ -242,18 +289,298 @@ describe("PiAgentDriver JSONL recovery", () => {
 		await runtime.dispose();
 	});
 
+	it("replays a started safe tool, commits its reserved result, and continues the model", async () => {
+		const { cwd, repo } = createRepository();
+		const session = await repo.create({ id: "safe-tool", cwd });
+		const parameters = Type.Object({});
+		const sourceLeafId = await session.appendCustomEntry(REQUEST_CONFIGURATION_CUSTOM_TYPE, {
+			schemaVersion: 1,
+			runId: "run-safe-tool",
+			systemPrompt: "system",
+			model: { provider: "unknown", id: "unknown" },
+			thinkingLevel: "off",
+			tools: [
+				{
+					name: "read_version",
+					description: "Read the version",
+					parameters: { type: "object", properties: {} },
+					replay: "safe",
+				},
+			],
+		});
+		const prompt = userMessage("read it");
+		await session.appendRecord({
+			type: "operation_started",
+			id: "run-safe-tool",
+			lane: "main",
+			sourceLeafId,
+			intent: { kind: "run", originalPrompt: [prompt], initialMessages: [], systemPromptOverride: "system" },
+		});
+		await session.appendMessage(prompt);
+		const assistantEntryId = await session.appendMessage(
+			assistantMessage([{ type: "toolCall", id: "call-safe", name: "read_version", arguments: {} }], "toolUse"),
+		);
+		await session.appendRecord({
+			type: "tool_started",
+			id: "tool-start-safe",
+			lane: "main",
+			runId: "run-safe-tool",
+			assistantEntryId,
+			toolIndex: 0,
+			toolCallId: "call-safe",
+			toolName: "read_version",
+			effectiveArgs: {},
+			resultEntryId: "tool-result-safe",
+			replay: "safe",
+		});
+		const reopened = await reopen(repo, await session.getMetadata());
+		let requestCount = 0;
+		let toolCallCount = 0;
+		const runtime = await createMinimalRuntime({
+			session: reopened,
+			streamFn: responseStream("continued", () => requestCount++),
+			systemPrompt: "system",
+			tools: [
+				{
+					name: "read_version",
+					label: "Read version",
+					description: "Read the version",
+					parameters,
+					execute: async () => {
+						toolCallCount++;
+						return { content: [{ type: "text", text: "0.1.0" }], details: {} };
+					},
+				},
+			],
+			toolReplay: { read_version: "safe" },
+		});
+
+		expect(await runtime.driver.getRecoveryState()).toEqual({
+			status: "resumable",
+			runId: "run-safe-tool",
+			point: "tool_batch",
+		});
+		await runtime.driver.resume();
+
+		expect(toolCallCount).toBe(1);
+		expect(requestCount).toBe(1);
+		expect(runtime.driver.messages.map((message) => message.role)).toEqual([
+			"user",
+			"assistant",
+			"toolResult",
+			"assistant",
+		]);
+		expect(await reopened.getEntry("tool-result-safe")).toMatchObject({
+			type: "message",
+			message: { role: "toolResult", toolCallId: "call-safe", isError: false },
+		});
+		expect(await reopened.findOpenOperations("main")).toEqual([]);
+		await runtime.dispose();
+	});
+
+	it("continues after a durable ToolResult without executing the tool again", async () => {
+		const { cwd, repo } = createRepository();
+		const session = await repo.create({ id: "tool-result-tail", cwd });
+		const parameters = Type.Object({});
+		const sourceLeafId = await session.appendCustomEntry(REQUEST_CONFIGURATION_CUSTOM_TYPE, {
+			schemaVersion: 1,
+			runId: "run-tool-result-tail",
+			systemPrompt: "system",
+			model: { provider: "unknown", id: "unknown" },
+			thinkingLevel: "off",
+			tools: [
+				{
+					name: "read_version",
+					description: "Read the version",
+					parameters: { type: "object", properties: {} },
+					replay: "safe",
+				},
+			],
+		});
+		const prompt = userMessage("read it");
+		await session.appendRecord({
+			type: "operation_started",
+			id: "run-tool-result-tail",
+			lane: "main",
+			sourceLeafId,
+			intent: { kind: "run", originalPrompt: [prompt], initialMessages: [], systemPromptOverride: "system" },
+		});
+		await session.appendMessage(prompt);
+		const assistantEntryId = await session.appendMessage(
+			assistantMessage([{ type: "toolCall", id: "call-result", name: "read_version", arguments: {} }], "toolUse"),
+		);
+		await session.appendRecord({
+			type: "tool_started",
+			id: "tool-start-result",
+			lane: "main",
+			runId: "run-tool-result-tail",
+			assistantEntryId,
+			toolIndex: 0,
+			toolCallId: "call-result",
+			toolName: "read_version",
+			effectiveArgs: {},
+			resultEntryId: "tool-result-tail",
+			replay: "safe",
+		});
+		await session.appendEntry(
+			{
+				type: "message",
+				id: "tool-result-tail",
+				message: {
+					role: "toolResult",
+					toolCallId: "call-result",
+					toolName: "read_version",
+					content: [{ type: "text", text: "0.1.0" }],
+					details: {},
+					isError: false,
+					timestamp: Date.now(),
+				},
+			},
+			"main",
+		);
+		const reopened = await reopen(repo, await session.getMetadata());
+		let requestCount = 0;
+		let toolCallCount = 0;
+		const runtime = await createMinimalRuntime({
+			session: reopened,
+			streamFn: responseStream("continued", () => requestCount++),
+			systemPrompt: "system",
+			tools: [
+				{
+					name: "read_version",
+					label: "Read version",
+					description: "Read the version",
+					parameters,
+					execute: async () => {
+						toolCallCount++;
+						return { content: [{ type: "text", text: "unexpected" }], details: {} };
+					},
+				},
+			],
+			toolReplay: { read_version: "safe" },
+		});
+
+		expect(await runtime.driver.getRecoveryState()).toEqual({
+			status: "resumable",
+			runId: "run-tool-result-tail",
+			point: "message_tail",
+		});
+		await runtime.driver.resume();
+
+		expect(toolCallCount).toBe(0);
+		expect(requestCount).toBe(1);
+		expect(
+			(await reopened.findEntries({ type: "message" })).filter((entry) => entry.type === "message"),
+		).toHaveLength(4);
+		await runtime.dispose();
+	});
+
+	it("executes a never-replay tool once when no durable ToolStart exists", async () => {
+		const { cwd, repo } = createRepository();
+		const session = await repo.create({ id: "before-tool-start", cwd });
+		const parameters = Type.Object({});
+		const sourceLeafId = await session.appendCustomEntry(REQUEST_CONFIGURATION_CUSTOM_TYPE, {
+			schemaVersion: 1,
+			runId: "run-before-tool-start",
+			systemPrompt: "system",
+			model: { provider: "unknown", id: "unknown" },
+			thinkingLevel: "off",
+			tools: [
+				{
+					name: "non_idempotent",
+					description: "Perform one effect",
+					parameters: { type: "object", properties: {} },
+					replay: "never",
+				},
+			],
+		});
+		const prompt = userMessage("perform it");
+		await session.appendRecord({
+			type: "operation_started",
+			id: "run-before-tool-start",
+			lane: "main",
+			sourceLeafId,
+			intent: { kind: "run", originalPrompt: [prompt], initialMessages: [], systemPromptOverride: "system" },
+		});
+		await session.appendMessage(prompt);
+		await session.appendMessage(
+			assistantMessage([{ type: "toolCall", id: "call-first", name: "non_idempotent", arguments: {} }], "toolUse"),
+		);
+		const reopened = await reopen(repo, await session.getMetadata());
+		let toolCallCount = 0;
+		const runtime = await createMinimalRuntime({
+			session: reopened,
+			streamFn: responseStream("continued"),
+			systemPrompt: "system",
+			tools: [
+				{
+					name: "non_idempotent",
+					label: "Non-idempotent",
+					description: "Perform one effect",
+					parameters,
+					execute: async () => {
+						toolCallCount++;
+						return { content: [{ type: "text", text: "done" }], details: {} };
+					},
+				},
+			],
+		});
+
+		expect(await runtime.driver.getRecoveryState()).toMatchObject({ status: "resumable", point: "tool_batch" });
+		await runtime.driver.resume();
+
+		expect(toolCallCount).toBe(1);
+		expect(await reopened.findRecords({ type: "tool_started" })).toHaveLength(1);
+		expect(
+			(await reopened.findEntries({ type: "message" })).filter((entry) => entry.type === "message"),
+		).toHaveLength(4);
+		await runtime.dispose();
+	});
+
 	it("blocks an unresolved tool call as outcome_unknown without replaying effects", async () => {
 		const { cwd, repo } = createRepository();
 		const session = await repo.create({ id: "unknown-tool", cwd });
+		const parameters = Type.Object({});
 		const prompt = userMessage("write something");
-		await startOperation(session, "run-unknown-tool", prompt);
+		const sourceLeafId = await session.appendCustomEntry(REQUEST_CONFIGURATION_CUSTOM_TYPE, {
+			schemaVersion: 1,
+			runId: "run-unknown-tool",
+			systemPrompt: "You are a helpful assistant.",
+			model: { provider: "unknown", id: "unknown" },
+			thinkingLevel: "off",
+			tools: [
+				{
+					name: "write_file",
+					description: "test tool",
+					parameters: { type: "object", properties: {} },
+					replay: "never",
+				},
+			],
+		});
+		await session.appendRecord({
+			type: "operation_started",
+			id: "run-unknown-tool",
+			lane: "main",
+			sourceLeafId,
+			intent: { kind: "run", originalPrompt: [prompt], initialMessages: [] },
+		});
 		await session.appendMessage(prompt);
-		await session.appendMessage(
-			assistantMessage(
-				[{ type: "toolCall", id: "call-1", name: "write_file", arguments: { path: "result.txt" } }],
-				"toolUse",
-			),
+		const assistantEntryId = await session.appendMessage(
+			assistantMessage([{ type: "toolCall", id: "call-1", name: "write_file", arguments: {} }], "toolUse"),
 		);
+		await session.appendRecord({
+			type: "tool_started",
+			id: "tool-start-never",
+			lane: "main",
+			runId: "run-unknown-tool",
+			assistantEntryId,
+			toolIndex: 0,
+			toolCallId: "call-1",
+			toolName: "write_file",
+			effectiveArgs: {},
+			resultEntryId: "tool-result-never",
+			replay: "never",
+		});
 		const reopened = await reopen(repo, await session.getMetadata());
 		let requestCount = 0;
 		let toolCallCount = 0;
@@ -265,7 +592,7 @@ describe("PiAgentDriver JSONL recovery", () => {
 					name: "write_file",
 					label: "write_file",
 					description: "test tool",
-					parameters: { type: "object", properties: {} },
+					parameters,
 					execute: async () => {
 						toolCallCount++;
 						return { content: [{ type: "text", text: "written" }], details: {} };
@@ -284,6 +611,149 @@ describe("PiAgentDriver JSONL recovery", () => {
 		expect(requestCount).toBe(0);
 		expect(toolCallCount).toBe(0);
 		expect(await reopened.findOpenOperations("main")).toHaveLength(1);
+		await runtime.dispose();
+	});
+
+	it("reconciles a completed never-replay tool without executing its effect again", async () => {
+		const { cwd, repo } = createRepository();
+		const session = await repo.create({ id: "reconciled-tool", cwd });
+		const parameters = Type.Object({});
+		const prompt = userMessage("write something");
+		const sourceLeafId = await session.appendCustomEntry(REQUEST_CONFIGURATION_CUSTOM_TYPE, {
+			schemaVersion: 1,
+			runId: "run-reconciled-tool",
+			systemPrompt: "You are a helpful assistant.",
+			model: { provider: "unknown", id: "unknown" },
+			thinkingLevel: "off",
+			reconciliationVersion: "provider-v1",
+			tools: [
+				{
+					name: "write_file",
+					description: "test tool",
+					parameters: { type: "object", properties: {} },
+					replay: "never",
+				},
+			],
+		});
+		await session.appendRecord({
+			type: "operation_started",
+			id: "run-reconciled-tool",
+			lane: "main",
+			sourceLeafId,
+			intent: { kind: "run", originalPrompt: [prompt], initialMessages: [] },
+		});
+		await session.appendMessage(prompt);
+		const assistantEntryId = await session.appendMessage(
+			assistantMessage([{ type: "toolCall", id: "call-reconciled", name: "write_file", arguments: {} }], "toolUse"),
+		);
+		await session.appendRecord({
+			type: "tool_started",
+			id: "tool-start-reconciled",
+			lane: "main",
+			runId: "run-reconciled-tool",
+			assistantEntryId,
+			toolIndex: 0,
+			toolCallId: "call-reconciled",
+			toolName: "write_file",
+			effectiveArgs: {},
+			resultEntryId: "tool-result-reconciled",
+			replay: "never",
+		});
+		const reopened = await reopen(repo, await session.getMetadata());
+		let requestCount = 0;
+		let toolCallCount = 0;
+		let reconciliationCount = 0;
+		const runtime = await createMinimalRuntime({
+			session: reopened,
+			streamFn: responseStream("continued", () => requestCount++),
+			tools: [
+				{
+					name: "write_file",
+					label: "write_file",
+					description: "test tool",
+					parameters,
+					execute: async () => {
+						toolCallCount++;
+						return { content: [{ type: "text", text: "unexpected" }], details: {} };
+					},
+				},
+			],
+			toolReconciliation: {
+				version: "provider-v1",
+				service: {
+					reconcile(request) {
+						reconciliationCount++;
+						expect(request).toMatchObject({
+							runId: "run-reconciled-tool",
+							toolCallId: "call-reconciled",
+							resultEntryId: "tool-result-reconciled",
+						});
+						return {
+							status: "completed",
+							result: { content: [{ type: "text", text: "already written" }], details: { providerId: "42" } },
+						};
+					},
+				},
+			},
+		});
+
+		expect(await runtime.driver.getRecoveryState()).toMatchObject({ status: "resumable", point: "tool_batch" });
+		await runtime.driver.resume();
+
+		expect(reconciliationCount).toBe(1);
+		expect(toolCallCount).toBe(0);
+		expect(requestCount).toBe(1);
+		expect(await reopened.getEntry("tool-result-reconciled")).toMatchObject({
+			type: "message",
+			message: {
+				role: "toolResult",
+				toolCallId: "call-reconciled",
+				content: [{ type: "text", text: "already written" }],
+				isError: false,
+			},
+		});
+		expect(await reopened.findOpenOperations("main")).toEqual([]);
+		await runtime.dispose();
+	});
+
+	it("restores a durable pending queue item after restart", async () => {
+		const { cwd, repo } = createRepository();
+		const session = await repo.create({ id: "queued-recovery", cwd });
+		const prompt = userMessage("initial");
+		await startAnchoredOperation(session, "run-queued-recovery", prompt, "You are a helpful assistant.");
+		await session.appendMessage(prompt);
+		await session.appendMessage(assistantMessage([{ type: "text", text: "first response" }]));
+		await session.appendRecord({
+			type: "queue_enqueued",
+			id: "queue-record",
+			lane: "main",
+			runId: "run-queued-recovery",
+			queue: "steer",
+			target: { type: "message", id: "queued-message", message: userMessage("queued after crash") },
+		});
+		const reopened = await reopen(repo, await session.getMetadata());
+		let requestMessages: AgentMessage[] = [];
+		const runtime = await createMinimalRuntime({
+			session: reopened,
+			streamFn: (_model, context) => {
+				requestMessages = structuredClone(context.messages) as AgentMessage[];
+				return responseStream("resumed")(_model, context);
+			},
+		});
+
+		expect(await runtime.driver.getRecoveryState()).toEqual({
+			status: "resumable",
+			runId: "run-queued-recovery",
+			point: "message_tail",
+		});
+		await runtime.driver.resume();
+
+		expect(requestMessages.at(-1)).toMatchObject({ role: "user", content: "queued after crash" });
+		expect(await reopened.getEntry("queued-message")).toMatchObject({
+			type: "message",
+			message: { role: "user", content: "queued after crash" },
+		});
+		expect(await reopened.findOpenOperations("main")).toEqual([]);
 		await runtime.dispose();
 	});
 

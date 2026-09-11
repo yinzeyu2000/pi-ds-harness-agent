@@ -3,6 +3,8 @@
 	"compilerOptions": {
 		"outDir": "./dist",
 		"paths": {
+			"@pi-ds/harness-runtime": ["../harness-runtime/dist/index.d.ts"],
+			"@pi-ds/harness-runtime/plugin-sdk": ["../harness-runtime/dist/plugin-sdk.d.ts"],
 			"@earendil-works/pi-agent-core": ["../agent/dist/index.d.ts"],
 			"@earendil-works/pi-agent-core/*": ["../agent/dist/*.d.ts"],
 			"@earendil-works/pi-ai": ["../ai/dist/index.d.ts"],

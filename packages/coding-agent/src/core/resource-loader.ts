@@ -119,6 +119,7 @@ function findShadowedContextFile(cwd: string): string | undefined {
 export function loadProjectContextFiles(options: {
 	cwd: string;
 	agentDir: string;
+	includeProject?: boolean;
 }): Array<{ path: string; content: string }> {
 	const resolvedCwd = resolvePath(options.cwd);
 	const resolvedAgentDir = resolvePath(options.agentDir);
@@ -131,6 +132,7 @@ export function loadProjectContextFiles(options: {
 		contextFiles.push(globalContext);
 		seenPaths.add(globalContext.path);
 	}
+	if (options.includeProject === false) return contextFiles;
 
 	const ancestorContextFiles: Array<{ path: string; content: string }> = [];
 

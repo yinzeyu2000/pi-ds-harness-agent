@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { InMemorySessionRepo, InMemorySessionStorage, Session } from "../../../src/harness/session/index.ts";
 import {
 	createSessionBackendConformance,
@@ -23,6 +23,18 @@ describe("InMemorySessionRepo conformance", () => {
 });
 
 describe("Session with in-memory storage", () => {
+	it("exposes the storage flush barrier through every lane view", async () => {
+		const storage = new InMemorySessionStorage({ id: "session", createdAt: 1 });
+		const flush = vi.spyOn(storage, "flush");
+		const session = new Session(storage);
+		await session.createLane("thread", null);
+
+		await session.flush();
+		await session.view("thread").flush();
+
+		expect(flush).toHaveBeenCalledTimes(2);
+	});
+
 	it("uses one injectable id generator across lane views", async () => {
 		let nextId = 0;
 		const session = new Session(new InMemorySessionStorage({ id: "session", createdAt: 1 }), {

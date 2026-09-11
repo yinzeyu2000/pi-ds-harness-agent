@@ -75,6 +75,7 @@ export {
 } from "./harness/compaction/compaction.ts";
 export * from "./harness/messages.ts";
 export * from "./harness/prompt-templates.ts";
+export * from "./harness/reducer.ts";
 // Harness
 export * from "./harness/result.ts";
 export * from "./harness/session/index.ts";

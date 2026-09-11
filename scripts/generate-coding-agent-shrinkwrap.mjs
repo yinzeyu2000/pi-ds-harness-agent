@@ -9,7 +9,8 @@ const repoRoot = resolve(scriptDir, "..");
 const codingAgentDir = join(repoRoot, "packages/coding-agent");
 const rootLockfilePath = join(repoRoot, "package-lock.json");
 const shrinkwrapPath = join(codingAgentDir, "npm-shrinkwrap.json");
-const internalPackagePrefix = "@earendil-works/pi-";
+const versionLockedInternalPackagePrefix = "@earendil-works/pi-";
+const internalPackagePrefixes = [versionLockedInternalPackagePrefix, "@pi-ds/"];
 const allowedInstallScriptPackages = new Map([
 	["@google/genai@1.52.0", "preinstall is a no-op in the published package"],
 	["protobufjs@7.6.5", "postinstall only warns about protobufjs version scheme mismatches"],
@@ -27,6 +28,10 @@ for (const arg of args) {
 
 function readJson(path) {
 	return JSON.parse(readFileSync(path, "utf8"));
+}
+
+function isInternalPackage(packageName) {
+	return internalPackagePrefixes.some((prefix) => packageName.startsWith(prefix));
 }
 
 function packageDependencies(entry) {
@@ -136,7 +141,7 @@ function getInternalWorkspaces(lockPackages) {
 		if (!lockPath.startsWith("packages/") || lockPath.includes("/node_modules/") || !entry.name || !entry.version) {
 			continue;
 		}
-		if (!entry.name.startsWith(internalPackagePrefix)) {
+		if (!isInternalPackage(entry.name)) {
 			continue;
 		}
 

@@ -29,9 +29,23 @@
 - Durable Facts、Live Events、Capability Middleware 三类事件语义；
 - write-before-publish 和纯函数 Projection Registry；
 - 确定性的 Profile / Bundle / Patch 组合器；
-- 带 monotonic guards 的基础工具流水线；
+- 固定 `pre/guard/approval/around/body/post/result` 顺序的工具流水线、Headless 默认拒绝和结构化阶段异常；
+- 可选 `--harness-runtime` print/JSON/RPC CLI、终端或 RPC 逐工具审批与显式 Extension 工厂加载；
+- 单一 `CodingRuntimeController` 与 durable Projection，统一驱动 print、JSON 和严格 JSONL RPC 消费端；
+- RPC prompt/queue/abort/resume/compaction、Extension 命令、配置切换、树查询/导航和优雅关闭；
+- canonical session id/路径/continue、图片初始消息，以及空闲期动态 Tool/Model/thinking level 切换；
+- Extension 命令、Agent/Tool 生命周期、pre-commit 消息变换及可恢复初始输入；
+- scoped Tool Catalog，以及纳入恢复配置锚点的版本化工具策略；
+- scoped Prompt Contributor 和不写入消息日志的临时 Prompt View；
+- Pi Models Provider、精确模型选择及恢复时的模型配置校验；
+- 并发工具完成顺序与 ToolResult 提交顺序解耦，结果始终按模型调用顺序持久化；
+- steer/follow-up queue 事实、Assistant/Tool usage 事实，以及重启后的待处理队列恢复；
+- 非幂等工具 Provider reconciliation；默认未知结果仍保持 `outcome_unknown`；
 - `PiAgentDriver` 的 prompt、abort、steer、follow-up 控制契约与可恢复的 Minimal Headless Runtime；
 - 可注入 JSONL Session、未闭合 Operation 分类、保守 `resume` 和未知工具副作用拦截；
+- 版本化请求配置锚点、恢复配置漂移拦截，以及 Memory/JSONL/SQLite 统一 `flush()` barrier；
+- 基于 Pi Reducer 的 messages、turn-state、tool-state Projection；
+- Tool Body 前的 `tool_started` 事实、稳定 ToolResult ID，以及 `safe`/`never` 恢复策略；
 - Fake Model + 只读 Tool + Memory Session 的完整离线演示测试。
 
 ## 架构
@@ -73,7 +87,7 @@ npm test --workspace=@pi-ds/harness-runtime
 
 - 全仓 TypeScript、格式、依赖和浏览器打包检查通过；
 - 全仓离线构建通过；
-- Harness Runtime：7 个测试文件、22 个测试全部通过，且不依赖网络和 Shell；
+- Harness Runtime：9 个测试文件、51 个测试全部通过，且不依赖网络和 Shell；
 - Pi 上游完整测试在当前 Windows 环境中仍存在 Bash 自动发现、符号链接权限、Unix socket 和路径分隔符差异，详情见[基线测试记录](docs/baseline-results.md)。
 
 ## 文档
@@ -83,6 +97,10 @@ npm test --workspace=@pi-ds/harness-runtime
 - [架构约束](docs/architecture.md)
 - [事件模型](docs/event-model.md)
 - [M3 JSONL 恢复开发交接](docs/handoff-m3-jsonl-recovery.md)
+- [M4 Tool/Prompt/Models 开发交接](docs/handoff-m4-tool-pipeline.md)
+- [M5 插件 SDK 与组合配置开发交接](docs/handoff-m5-plugin-composition.md)
+- [M6 第一批 Coding Runtime 开发交接](docs/handoff-m6-coding-runtime.md)
+- [Harness RPC 协议](docs/harness-rpc.md)
 - [源码参考台账](docs/source-port-ledger.md)
 - [ADR：唯一 Session 与 Agent Loop](docs/adr/0001-single-session-and-agent-loop.md)
 - [ADR：插件宿主实现](docs/adr/0002-plugin-host-implementation.md)
@@ -92,10 +110,10 @@ npm test --workspace=@pi-ds/harness-runtime
 
 接下来的重点是：
 
-1. 完成 M3 的 Reducer Projection、请求配置锚点、ToolStart 安全恢复和显式 flush barrier；
-2. 完成 Tool pre/guard/around/post/result 正式流水线；
-3. 增加 Approval、Prompt Contributor 和 Pi Models Provider；
-4. 在统一 Runtime 上逐步迁移 Coding Profile、CLI 与 TUI。
+1. 让 TUI 消费 Harness Runtime 与 Projection，不保存第二份权威状态；
+2. 补全跨文件会话切换、Fork、带摘要的树导航和剩余 Extension 兼容边界；
+3. 建立旧 Pi CLI/RPC 行为兼容矩阵并增加协议压力测试；
+4. 扩展 Coding Profile 的崩溃注入与真实交互端到端测试。
 
 完整阶段计划见 [`EXECUTION_PLAN.md`](EXECUTION_PLAN.md)。
 

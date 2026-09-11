@@ -23,6 +23,18 @@ export default mergeConfig(
 		resolve: {
 			alias: [
 				{
+					find: /^@earendil-works\/pi-agent-core\/node$/,
+					replacement: fileURLToPath(new URL("../agent/src/node.ts", import.meta.url)),
+				},
+				{
+					find: /^@pi-ds\/harness-runtime$/,
+					replacement: fileURLToPath(new URL("../harness-runtime/src/index.ts", import.meta.url)),
+				},
+				{
+					find: /^@pi-ds\/harness-runtime\/plugin-sdk$/,
+					replacement: fileURLToPath(new URL("../harness-runtime/src/plugin-sdk.ts", import.meta.url)),
+				},
+				{
 					find: /^@earendil-works\/pi-client$/,
 					replacement: fileURLToPath(new URL("../client/src/index.ts", import.meta.url)),
 				},

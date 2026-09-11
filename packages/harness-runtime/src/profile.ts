@@ -13,6 +13,7 @@ export interface Bundle {
 
 export type ProfilePatch =
 	| { operation: "insert"; spec: ResolvedPluginSpec; after?: string }
+	| { operation: "replace"; id: string; spec: ResolvedPluginSpec }
 	| { operation: "disable"; id: string }
 	| { operation: "mergeConfig"; id: string; config: Record<string, unknown> }
 	| { operation: "replaceConfig"; id: string; config: unknown };
@@ -51,6 +52,17 @@ function applyPatch(plugins: ResolvedPluginSpec[], ids: Set<string>, patch: Prof
 			patch.after === undefined ? plugins.length : plugins.findIndex((spec) => spec.id === patch.after) + 1;
 		if (index === 0) throw new Error(`Patch target not found: ${patch.after}`);
 		plugins.splice(index, 0, structuredClone(patch.spec));
+		ids.add(patch.spec.id);
+		return;
+	}
+	if (patch.operation === "replace") {
+		const index = plugins.findIndex((candidate) => candidate.id === patch.id);
+		if (index === -1) throw new Error(`Patch target not found: ${patch.id}`);
+		if (patch.spec.id !== patch.id && ids.has(patch.spec.id)) {
+			throw new Error(`Duplicate plugin spec id: ${patch.spec.id}`);
+		}
+		plugins.splice(index, 1, structuredClone(patch.spec));
+		ids.delete(patch.id);
 		ids.add(patch.spec.id);
 		return;
 	}

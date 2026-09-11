@@ -24,6 +24,33 @@ export {
 	type SessionStats,
 } from "./core/agent-session.ts";
 export { readStoredCredential } from "./core/auth-storage.ts";
+export {
+	type CreateModelBackedCodingRuntimeOptions,
+	type CreateModelCompactionServiceOptions,
+	createModelBackedCodingRuntime,
+	createModelCompactionService,
+} from "./core/coding-model-runtime.ts";
+export {
+	type CodingRuntime,
+	type CreateCodingRuntimeOptions,
+	createCodingRuntime,
+} from "./core/coding-runtime.ts";
+export {
+	type CodingRuntimeCommandInfo,
+	CodingRuntimeController,
+	type CodingRuntimeDelivery,
+} from "./core/coding-runtime-controller.ts";
+export {
+	type CodingRuntimeFactory,
+	CodingRuntimeHost,
+	type CodingRuntimeReplacement,
+} from "./core/coding-runtime-host.ts";
+export {
+	CodingRuntimeProjection,
+	type CodingRuntimeSnapshot,
+	type CodingRuntimeSnapshotListener,
+	readCodingRuntimeSnapshot,
+} from "./core/coding-runtime-projection.ts";
 // Compaction
 export {
 	type BranchPreparation,
@@ -65,6 +92,7 @@ export type {
 	BeforeProviderRequestEvent,
 	BeforeProviderRequestEventResult,
 	BuildSystemPromptOptions,
+	CodingRuntimeCommand,
 	CompactOptions,
 	ContextEvent,
 	ContextUsage,
@@ -98,6 +126,12 @@ export type {
 	InputEventResult,
 	InputSource,
 	KeybindingsManager,
+	LegacyExtensionAdapterOptions,
+	LegacyExtensionContribution,
+	LegacyExtensionSetAdapterOptions,
+	LegacyExtensionSetContribution,
+	LegacyExtensionSetPlugin,
+	LegacyExtensionSpec,
 	LoadExtensionsResult,
 	LsToolCallEvent,
 	MarkdownTransformContext,
@@ -155,6 +189,8 @@ export type {
 } from "./core/extensions/index.ts";
 export {
 	createExtensionRuntime,
+	createLegacyExtensionPlugin,
+	createLegacyExtensionSetPlugin,
 	defineTool,
 	discoverAndLoadExtensions,
 	ExtensionRunner,
@@ -167,6 +203,7 @@ export {
 	isReadToolResult,
 	isToolCallEventType,
 	isWriteToolResult,
+	LEGACY_EXTENSIONS_SERVICE,
 	wrapRegisteredTool,
 	wrapRegisteredTools,
 } from "./core/extensions/index.ts";
@@ -347,11 +384,22 @@ export {
 export { type MainOptions, main } from "./main.ts";
 // Run modes for programmatic SDK usage
 export {
+	type CodingPrintModeOptions,
+	type HarnessRpcApprovalRequestEvent,
+	HarnessRpcApprovalService,
+	type HarnessRpcCommand,
+	type HarnessRpcEvent,
+	type HarnessRpcEventSink,
+	type HarnessRpcModeOptions,
+	type HarnessRpcResponse,
+	HarnessRpcSession,
+	type HarnessRpcSessionOptions,
 	InteractiveMode,
 	type InteractiveModeOptions,
 	type JsonAgentSessionEvent,
 	type ModelInfo,
 	type PrintModeOptions,
+	parseHarnessRpcCommand,
 	RpcClient,
 	type RpcClientOptions,
 	type RpcCommand,
@@ -360,6 +408,8 @@ export {
 	type RpcExtensionUIResponse,
 	type RpcResponse,
 	type RpcSessionState,
+	runCodingPrintMode,
+	runHarnessRpcMode,
 	runPrintMode,
 	runRpcMode,
 } from "./modes/index.ts";

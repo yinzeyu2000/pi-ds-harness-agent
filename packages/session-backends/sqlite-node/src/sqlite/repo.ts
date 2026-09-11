@@ -418,6 +418,10 @@ class SqliteSessionStorage implements SessionStorage<SqliteSessionMetadata> {
 		return decodeSessionMetadata(requireSessionRow(this.db, this.metadata.id), this.metadata.path);
 	}
 
+	async flush(): Promise<void> {
+		await this.operations.enqueue(() => undefined);
+	}
+
 	isForSession(sessionId: string): boolean {
 		return this.metadata.id === sessionId;
 	}

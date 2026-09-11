@@ -60,6 +60,15 @@ describe("parseArgs", () => {
 		});
 	});
 
+	describe("--harness-runtime flag", () => {
+		test("parses the canonical runtime opt-in", () => {
+			const result = parseArgs(["--harness-runtime", "--print", "hello"]);
+			expect(result.harnessRuntime).toBe(true);
+			expect(result.print).toBe(true);
+			expect(result.messages).toEqual(["hello"]);
+		});
+	});
+
 	describe("--continue flag", () => {
 		test("parses --continue flag", () => {
 			const result = parseArgs(["--continue"]);

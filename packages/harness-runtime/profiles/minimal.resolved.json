@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "profileId": "minimal",
+  "plugins": [
+    {
+      "id": "session-memory",
+      "plugin": "session-memory",
+      "enabled": true,
+      "scope": "agent",
+      "provides": ["pi-ds.session"],
+      "requires": []
+    },
+    {
+      "id": "tools",
+      "plugin": "tools-static",
+      "enabled": true,
+      "scope": "agent",
+      "provides": ["pi-ds.tools"],
+      "requires": []
+    },
+    {
+      "id": "prompt",
+      "plugin": "prompt-contributors",
+      "enabled": true,
+      "scope": "agent",
+      "provides": ["pi-ds.prompt"],
+      "requires": []
+    },
+    {
+      "id": "models",
+      "plugin": "pi-models-provider",
+      "enabled": true,
+      "scope": "agent",
+      "provides": ["pi-ds.models"],
+      "requires": []
+    },
+    {
+      "id": "driver",
+      "plugin": "pi-agent-driver",
+      "enabled": true,
+      "scope": "agent",
+      "provides": ["pi-ds.agent-driver"],
+      "requires": ["pi-ds.session", "pi-ds.tools", "pi-ds.prompt", "pi-ds.models"]
+    }
+  ]
+}

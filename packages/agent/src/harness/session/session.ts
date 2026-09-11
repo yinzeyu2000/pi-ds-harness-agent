@@ -115,6 +115,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> implem
 	view(lane: string): SessionTree {
 		if (lane === "main") return this;
 		return {
+			flush: () => this.flush(),
 			getLeafId: () => this.getLeafIdForLane(lane),
 			getEntry: (id) => this.getEntry(id),
 			getStats: () => this.getStats(),
@@ -129,6 +130,10 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> implem
 			appendMessage: (message) => this.appendMessageToLane(lane, message),
 			appendCustomEntry: (customType, data) => this.appendCustomEntryToLane(lane, customType, data),
 		};
+	}
+
+	async flush(): Promise<void> {
+		await this.storage.flush();
 	}
 
 	async getLeafId(): Promise<string | null> {

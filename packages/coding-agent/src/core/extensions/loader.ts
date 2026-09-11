@@ -518,6 +518,14 @@ async function loadExtensionModule(extensionPath: string, cacheToken?: Extension
 	return factory;
 }
 
+/** Import an Extension module without activating its factory. */
+export async function importExtensionFactory(extensionPath: string, cwd: string): Promise<ExtensionFactory> {
+	const resolvedPath = resolvePath(extensionPath, cwd, { normalizeUnicodeSpaces: true });
+	const factory = await loadExtensionModule(resolvedPath);
+	if (!factory) throw new Error(`Extension does not export a valid factory function: ${extensionPath}`);
+	return factory;
+}
+
 /**
  * Create an Extension object with empty collections.
  */

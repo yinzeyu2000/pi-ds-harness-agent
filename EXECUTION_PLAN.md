@@ -548,8 +548,12 @@ interface Profile {
 
 - 已允许 Minimal Runtime 注入预打开的 canonical Session，因此 Node 侧可直接接入 Pi `JsonlSessionRepo`，核心包不引入 Node 文件系统依赖。
 - 已识别 main lane 的未闭合 `run` Operation，并实现 `operation_start`、message tail、assistant terminal、abort 和 error 边界的基础 `resume`。
-- 未决 Tool Call 统一标记为 `outcome_unknown`，恢复过程不会调用模型或工具；损坏日志中的多个未闭合 Operation 会被拒绝。
-- 已增加真实 JSONL 重开和崩溃边界测试。Reducer Projection、请求配置锚点、`tool_started` 的 safe replay/reconciliation 和显式 flush barrier 仍待完成。
+- 已在 Tool Body 前写入并 flush `tool_started`，为 ToolResult 预留稳定 Entry ID；无 ToolStart 可首次执行、`replay: safe` 可重放、`replay: never` 按 `outcome_unknown` 阻断。
+- 已增加真实 JSONL 重开和崩溃边界测试。
+- 已增加 `schemaVersion: 1` 请求配置锚点；恢复时会校验系统提示词、模型和工具集合，配置漂移按 `configuration_mismatch` fail-closed。
+- Session、Memory、JSONL 和 SQLite 已提供统一 `flush()` barrier；Driver 在模型请求、消息发布和 Operation 终态边界显式等待。
+- 已复用 Pi Reducer 建立 messages、turn-state、tool-state Projection；同一 Memory Session 的实时快照、重开 replay 和重复 replay 深度相等。
+- M3 的 Minimal Runtime / main-lane `run` 验收范围已经完成。compaction、navigation、非 main lane 与通用 `initialMessages` 恢复随完整 AgentHarness 迁移进入 M6。
 
 任务：
 
@@ -568,6 +572,8 @@ interface Profile {
 - Replay 不重新执行外部副作用，未知副作用结果不会被盲目重试。
 
 ### M4：正式 Tool/Prompt/LLM 流水线（7–10 天）
+
+当前进度（2026-09-03）：M4 的 Headless Runtime 范围已完成。包括 Tool `pre/guard/approval/around/body/post/result`、scoped Tool Catalog、Prompt Contributor、Pi Models Provider、并发结果顺序、版本化恢复配置、queue/usage 事实与重启恢复，以及非幂等工具 Provider reconciliation。交互式审批前端随 Coding Profile 在 M6 接入。
 
 任务：
 
@@ -589,6 +595,8 @@ interface Profile {
 
 ### M5：统一插件 API 与组合配置（5–8 天）
 
+当前进度（2026-09-03）：M5 已完成。仓库现在只有一个 public plugin SDK 入口，并提供框架无关的 Plugin conformance test kit；resolved manifest 命令同时校验 minimal/coding Profile 的结构、Service 冲突、缺失依赖和有限 JSON 配置。Profile Patch 支持显式原子 `replace`，Coding Profile 用它将 memory Session 唯一替换为 JSONL Session。Pi 旧 Extension 由 Coding Agent 包内的适配器纳入 Plugin Scope，Scope 释放时统一失效旧 Runtime 并清理事件订阅。Coding Profile 此阶段是已校验的组合契约，CLI/TUI 的实际接线属于 M6。
+
 任务：
 
 - 实现静态 Bundle/Profile/Patch 组合器。
@@ -605,6 +613,8 @@ interface Profile {
 - 第三方示例插件只导入 public plugin-sdk。
 
 ### M6：Coding Agent 产品迁移（7–12 天）
+
+当前进度（2026-09-11）：Coding Runtime 已通过同一个 `PiAgentDriver` 组合真实 JSONL Session、Pi Coding Tools、Skills、模型调用、Compaction、Approval、Telemetry 与旧 Extension 集合。`--harness-runtime` 已接入有限 print/JSON 和严格 JSONL RPC，支持 canonical session id/路径/continue、图片初始消息、显式 Extension 工厂、终端或 RPC 工具审批。单一 `CodingRuntimeController` 统一 prompt/queue/abort/resume/compaction、Extension 命令、动态 Tool/Model/thinking 配置以及同文件树查询/导航；所有消费端读取同一 durable Projection。Extension 生命周期、输入/消息/工具变换和恢复仍遵守 write-before-publish。TUI、跨文件会话切换/Fork、带摘要树导航与完整旧 CLI 兼容矩阵仍待迁移。
 
 任务：
 

@@ -266,6 +266,10 @@ const noOpUIContext: ExtensionUIContext = {
 	setToolsExpanded: () => {},
 };
 
+export function getNoOpExtensionUIContext(): ExtensionUIContext {
+	return noOpUIContext;
+}
+
 export class ExtensionRunner {
 	private extensions: Extension[];
 	private runtime: ExtensionRuntime;

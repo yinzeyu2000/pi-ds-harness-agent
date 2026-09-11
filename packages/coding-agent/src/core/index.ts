@@ -26,6 +26,33 @@ export {
 	createAgentSessionServices,
 } from "./agent-session-services.ts";
 export { type BashExecutorOptions, type BashResult, executeBashWithOperations } from "./bash-executor.ts";
+export {
+	type CreateModelBackedCodingRuntimeOptions,
+	type CreateModelCompactionServiceOptions,
+	createModelBackedCodingRuntime,
+	createModelCompactionService,
+} from "./coding-model-runtime.ts";
+export {
+	type CodingRuntime,
+	type CreateCodingRuntimeOptions,
+	createCodingRuntime,
+} from "./coding-runtime.ts";
+export {
+	type CodingRuntimeCommandInfo,
+	CodingRuntimeController,
+	type CodingRuntimeDelivery,
+} from "./coding-runtime-controller.ts";
+export {
+	type CodingRuntimeFactory,
+	CodingRuntimeHost,
+	type CodingRuntimeReplacement,
+} from "./coding-runtime-host.ts";
+export {
+	CodingRuntimeProjection,
+	type CodingRuntimeSnapshot,
+	type CodingRuntimeSnapshotListener,
+	readCodingRuntimeSnapshot,
+} from "./coding-runtime-projection.ts";
 export type { CompactionResult } from "./compaction/index.ts";
 export { createEventBus, type EventBus, type EventBusController } from "./event-bus.ts";
 export { areExperimentalFeaturesEnabled } from "./experimental.ts";
@@ -39,7 +66,10 @@ export {
 	type BeforeAgentStartEvent,
 	type BeforeAgentStartEventResult,
 	type BuildSystemPromptOptions,
+	type CodingRuntimeCommand,
 	type ContextEvent,
+	createLegacyExtensionPlugin,
+	createLegacyExtensionSetPlugin,
 	defineTool,
 	discoverAndLoadExtensions,
 	type ExecOptions,
@@ -57,6 +87,13 @@ export {
 	type ExtensionShortcut,
 	type ExtensionUIContext,
 	type InlineExtension,
+	LEGACY_EXTENSIONS_SERVICE,
+	type LegacyExtensionAdapterOptions,
+	type LegacyExtensionContribution,
+	type LegacyExtensionSetAdapterOptions,
+	type LegacyExtensionSetContribution,
+	type LegacyExtensionSetPlugin,
+	type LegacyExtensionSpec,
 	type LoadExtensionsResult,
 	type MessageRenderer,
 	type RegisteredCommand,

@@ -40,6 +40,8 @@ export class InMemorySessionStorage implements SessionStorage {
 		return structuredClone(this.metadata);
 	}
 
+	async flush(): Promise<void> {}
+
 	async getLanes(): Promise<LanePointer[]> {
 		return this.state.getLanes();
 	}

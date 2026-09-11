@@ -28,12 +28,21 @@ import {
 } from "./cli/auth-command.ts";
 import { resolveCredentialForPrint } from "./cli/credential-print.ts";
 import { processFileArguments } from "./cli/file-processor.ts";
+import { runHarnessCliRuntime } from "./cli/harness-runtime.ts";
 import { buildInitialMessage } from "./cli/initial-message.ts";
 import { listModels } from "./cli/list-models.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
 import { selectSession } from "./cli/session-picker.ts";
 import { shouldRunFirstTimeSetup, showFirstTimeSetup, showStartupSelector } from "./cli/startup-ui.ts";
-import { APP_NAME, ENV_SESSION_DIR, expandTildePath, getAgentDir, getPackageDir, VERSION } from "./config.ts";
+import {
+	APP_NAME,
+	ENV_SESSION_DIR,
+	expandTildePath,
+	getAgentDir,
+	getPackageDir,
+	getSessionsDir,
+	VERSION,
+} from "./config.ts";
 import { type CreateAgentSessionRuntimeFactory, createAgentSessionRuntime } from "./core/agent-session-runtime.ts";
 import {
 	type AgentSessionRuntimeDiagnostic,
@@ -648,7 +657,7 @@ export async function main(args: string[], options?: MainOptions) {
 	const { migratedAuthProviders: migratedProviders, deprecationWarnings } = runMigrations(cwd);
 	time("runMigrations");
 
-	const startupSettingsManager = SettingsManager.create(cwd, agentDir);
+	const startupSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
 	const startupSettingsDiagnostics = collectSettingsDiagnostics(startupSettingsManager);
 
 	// Experimental first-time setup: theme choice and analytics opt-in.
@@ -672,6 +681,60 @@ export async function main(args: string[], options?: MainOptions) {
 		(parsed.sessionDir ? normalizePath(parsed.sessionDir) : undefined) ??
 		(envSessionDir ? expandTildePath(envSessionDir) : undefined) ??
 		startupSettingsManager.getSessionDir();
+	if (parsed.harnessRuntime && !parsed.help && parsed.listModels === undefined) {
+		if (appMode === "interactive") {
+			console.error(chalk.red("Error: --harness-runtime requires --print, --mode json, or --mode rpc"));
+			process.exitCode = 1;
+			restoreStdout();
+			return;
+		}
+		const stdinContent = appMode === "rpc" ? undefined : await readPipedStdin();
+		const harnessProjectTrusted = await resolveProjectTrusted({
+			cwd,
+			trustStore: new ProjectTrustStore(agentDir),
+			trustOverride: parsed.projectTrustOverride,
+			defaultProjectTrust: startupSettingsManager.getDefaultProjectTrust(),
+			projectTrustContext: createProjectTrustContext({
+				cwd,
+				mode: appMode,
+				settingsManager: startupSettingsManager,
+				hasUI: false,
+			}),
+		});
+		const harnessSettingsManager = SettingsManager.create(cwd, agentDir, {
+			projectTrusted: harnessProjectTrusted,
+		});
+		const { initialMessage, initialImages } =
+			appMode === "rpc"
+				? { initialMessage: undefined, initialImages: undefined }
+				: await prepareInitialMessage(parsed, harnessSettingsManager.getImageAutoResize(), stdinContent);
+		try {
+			const exitCode = await runHarnessCliRuntime({
+				parsed,
+				mode: appMode === "rpc" ? "rpc" : toPrintOutputMode(appMode),
+				cwd,
+				agentDir,
+				sessionsRoot: sessionDir ?? getSessionsDir(),
+				settingsManager: harnessSettingsManager,
+				offline: offlineMode,
+				initialMessage,
+				initialImages,
+				projectTrusted: harnessProjectTrusted,
+				approvalPrompt:
+					appMode === "print" && process.stdin.isTTY && process.stdout.isTTY
+						? (message) => promptConfirm(message)
+						: undefined,
+			});
+			if (exitCode !== 0) process.exitCode = exitCode;
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			console.error(chalk.red(`Error: ${message}`));
+			process.exitCode = 1;
+		} finally {
+			restoreStdout();
+		}
+		return;
+	}
 	let sessionManager = await createSessionManager(parsed, cwd, sessionDir, startupSettingsManager);
 	const missingSessionCwdIssue = getMissingSessionCwdIssue(sessionManager, cwd);
 	if (missingSessionCwdIssue) {

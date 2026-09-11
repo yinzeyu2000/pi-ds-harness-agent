@@ -123,6 +123,10 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 		await this.tail;
 	}
 
+	async flush(): Promise<void> {
+		await this.drain();
+	}
+
 	async getMetadata(): Promise<JsonlSessionMetadata> {
 		return structuredClone(this.metadata);
 	}
