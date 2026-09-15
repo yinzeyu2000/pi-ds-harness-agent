@@ -3,7 +3,13 @@ import type { CodingRuntime } from "./coding-runtime.ts";
 import { CodingRuntimeController } from "./coding-runtime-controller.ts";
 import type { CodingRuntimeSnapshot, CodingRuntimeSnapshotListener } from "./coding-runtime-projection.ts";
 
-export type CodingRuntimeFactory = (sessionId: string) => Promise<CodingRuntime>;
+export interface CodingRuntimeTarget {
+	sessionId?: string;
+	cwd: string;
+	parentSessionId?: string;
+}
+
+export type CodingRuntimeFactory = (target: CodingRuntimeTarget) => Promise<CodingRuntime>;
 
 export interface CodingRuntimeReplacement {
 	previousSessionId: string;
@@ -64,18 +70,43 @@ export class CodingRuntimeHost {
 		return () => this.agentEventListeners.delete(listener);
 	}
 
-	async switchSession(sessionId: string): Promise<CodingRuntimeReplacement> {
+	async switchSession(target: CodingRuntimeTarget & { sessionId: string }): Promise<CodingRuntimeReplacement> {
+		return this.replaceRuntime(target, false);
+	}
+
+	async newSession(options?: {
+		id?: string;
+		cwd?: string;
+		parentSessionId?: string;
+	}): Promise<CodingRuntimeReplacement> {
+		this.assertActive();
+		return this.replaceRuntime(
+			{
+				cwd: options?.cwd ?? this.runtime.cwd,
+				...(options?.id === undefined ? {} : { sessionId: options.id }),
+				...(options?.parentSessionId === undefined ? {} : { parentSessionId: options.parentSessionId }),
+			},
+			true,
+		);
+	}
+
+	reload(): Promise<CodingRuntimeReplacement> {
+		this.assertActive();
+		return this.replaceRuntime({ sessionId: this.runtime.sessionId, cwd: this.runtime.cwd }, true);
+	}
+
+	private async replaceRuntime(target: CodingRuntimeTarget, force: boolean): Promise<CodingRuntimeReplacement> {
 		this.assertActive();
 		if (this.replacing) throw new Error("Coding Runtime replacement is already in progress");
-		if (sessionId === this.runtime.sessionId) {
-			return { previousSessionId: sessionId, sessionId, snapshot: this.snapshot };
+		if (!force && target.sessionId === this.runtime.sessionId && target.cwd === this.runtime.cwd) {
+			return { previousSessionId: target.sessionId, sessionId: target.sessionId, snapshot: this.snapshot };
 		}
-		await this.assertReplaceable();
 		this.replacing = true;
 		let nextRuntime: CodingRuntime | undefined;
 		let nextController: CodingRuntimeController | undefined;
 		try {
-			nextRuntime = await this.factory(sessionId);
+			await this.assertReplaceable();
+			nextRuntime = await this.factory(target);
 			nextController = await CodingRuntimeController.create(nextRuntime);
 			await this.assertReplaceable();
 			const previousSessionId = this.runtime.sessionId;
@@ -104,7 +135,10 @@ export class CodingRuntimeHost {
 	): Promise<{ metadata: JsonlSessionMetadata; replacement: CodingRuntimeReplacement }> {
 		this.assertActive();
 		const metadata = await this.controller.forkSession(options);
-		return { metadata, replacement: await this.switchSession(metadata.id) };
+		return {
+			metadata,
+			replacement: await this.switchSession({ sessionId: metadata.id, cwd: metadata.cwd }),
+		};
 	}
 
 	async dispose(): Promise<void> {
@@ -119,6 +153,7 @@ export class CodingRuntimeHost {
 	}
 
 	private async assertReplaceable(): Promise<void> {
+		this.assertActive();
 		if (this.currentController.isIdle && (await this.currentController.getRecoveryState()).status === "idle") return;
 		throw new Error("Cannot replace the Coding Runtime while it is active or requires recovery");
 	}

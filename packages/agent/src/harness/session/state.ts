@@ -268,8 +268,11 @@ export class SessionState {
 			let targetId: string | null = null;
 			if (selectedEntryId !== null) {
 				const entry = this.getEntry(selectedEntryId);
-				if (!entry || entry.type !== "message") {
-					throw new SessionError("invalid_fork_target", `Fork target is not a message entry: ${selectedEntryId}`);
+				if (!entry || !isForkableContextEntry(entry)) {
+					throw new SessionError(
+						"invalid_fork_target",
+						`Fork target is not a conversational context entry: ${selectedEntryId}`,
+					);
 				}
 				const position = options.position ?? (options.entryId === undefined ? "at" : "before");
 				targetId = position === "at" ? entry.id : entry.parentId;
@@ -341,4 +344,8 @@ export class SessionState {
 			(query.afterSeq === undefined || record.seq > query.afterSeq)
 		);
 	}
+}
+
+function isForkableContextEntry(entry: Entry): boolean {
+	return entry.type === "message" || entry.type === "compaction" || entry.type === "branch_summary";
 }

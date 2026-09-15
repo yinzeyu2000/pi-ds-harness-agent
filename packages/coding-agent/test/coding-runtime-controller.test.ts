@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentMessage, CompactionPreparation, StreamFn } from "@earendil-works/pi-agent-core";
@@ -15,6 +15,74 @@ function textOf(message: AgentMessage | undefined): string {
 }
 
 describe("Coding Runtime consumer controller", () => {
+	it("expands prompt templates before persisting the canonical run intent", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pi-ds-runtime-prompt-template-"));
+		const templatePath = join(cwd, "review.md");
+		await writeFile(templatePath, "Review $1 carefully.\n", "utf8");
+		const requested: string[] = [];
+		const streamFn: StreamFn = (_model, context) => {
+			requested.push(textOf(context.messages.at(-1)));
+			const stream = createAssistantMessageEventStream();
+			queueMicrotask(() => {
+				stream.push({
+					type: "done",
+					reason: "stop",
+					message: {
+						role: "assistant",
+						content: [{ type: "text", text: "done" }],
+						api: "faux",
+						provider: "faux",
+						model: "faux-1",
+						usage: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 0,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						stopReason: "stop",
+						timestamp: Date.now(),
+					},
+				});
+			});
+			return stream;
+		};
+		const runtime = await createCodingRuntime({
+			cwd,
+			sessionsRoot: join(cwd, ".sessions"),
+			sessionId: "prompt-template",
+			streamFn,
+			toolNames: [],
+			includeDefaultSkills: false,
+			promptTemplatePaths: [templatePath],
+			compaction: {
+				settings: { enabled: false, reserveTokens: 100, keepRecentTokens: 0 },
+				execute: async () => {
+					throw new Error("not used");
+				},
+			},
+		});
+		const controller = await CodingRuntimeController.create(runtime);
+		try {
+			expect(controller.commands).toContainEqual({
+				name: "review",
+				description: "Review $1 carefully.",
+				source: "prompt",
+			});
+			await controller.invokeCommand("review", '"src/file with spaces.ts"');
+			expect(requested).toEqual(["Review src/file with spaces.ts carefully.\n"]);
+			const operations = await runtime.session.findRecords({ type: "operation_started" });
+			expect(operations).toHaveLength(1);
+			const operation = operations[0];
+			if (operation?.intent.kind !== "run") throw new Error("Expected run operation");
+			expect(operation.intent.originalPrompt.map(textOf)).toEqual(["Review src/file with spaces.ts carefully.\n"]);
+		} finally {
+			await controller.dispose();
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
 	it("routes auto delivery through one Driver and exposes the durable final snapshot", async () => {
 		const cwd = await mkdtemp(join(tmpdir(), "pi-ds-runtime-controller-"));
 		let releaseFirst = () => {};

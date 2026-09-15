@@ -433,4 +433,54 @@ describe("PiAgentDriver control contract", () => {
 		]);
 		await runtime.dispose();
 	});
+
+	it("durably clears pending queues without consuming cancelled messages after restart", async () => {
+		const firstStreamStarted = createDeferred();
+		const releaseFirstResponse = createDeferred();
+		let requestCount = 0;
+		const streamFn: StreamFn = () => {
+			const stream = createAssistantMessageEventStream();
+			const currentRequest = ++requestCount;
+			queueMicrotask(() => {
+				void (async () => {
+					if (currentRequest === 1) {
+						firstStreamStarted.resolve();
+						await releaseFirstResponse.promise;
+					}
+					stream.push({ type: "done", reason: "stop", message: assistantMessage(`response ${currentRequest}`) });
+				})();
+			});
+			return stream;
+		};
+		const repo = new InMemorySessionRepo();
+		const session = await repo.create({ id: "driver-clear-queue" });
+		const runtime = await createMinimalRuntime({ session, streamFn });
+		const prompt = runtime.driver.prompt("initial");
+		await firstStreamStarted.promise;
+		await runtime.driver.followUp("cancel follow up");
+		await runtime.driver.steer("cancel steer");
+
+		const cleared = await runtime.driver.clearQueue();
+		expect(cleared.steering.map(messageText)).toEqual(["cancel steer"]);
+		expect(cleared.followUp.map(messageText)).toEqual(["cancel follow up"]);
+		expect(runtime.driver.hasPendingMessages()).toBe(false);
+		const enqueued = await session.findRecords({ type: "queue_enqueued", order: "oldestFirst" });
+		const cancelled = await session.findRecords({ type: "queue_cancelled", order: "oldestFirst" });
+		expect(cancelled.map((record) => record.entryId).sort()).toEqual(
+			enqueued.map((record) => record.target.id).sort(),
+		);
+
+		releaseFirstResponse.resolve();
+		await prompt;
+		expect(requestCount).toBe(1);
+		expect(runtime.driver.messages.some((message) => messageText(message).startsWith("cancel"))).toBe(false);
+		const metadata = await session.getMetadata();
+		await runtime.dispose();
+
+		const reopened = await repo.open(metadata);
+		const recovered = await createMinimalRuntime({ session: reopened, streamFn });
+		expect(recovered.driver.hasPendingMessages()).toBe(false);
+		expect(await recovered.driver.getRecoveryState()).toEqual({ status: "idle" });
+		await recovered.dispose();
+	});
 });

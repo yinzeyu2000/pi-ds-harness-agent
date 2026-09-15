@@ -97,6 +97,39 @@ describe("Harness CLI runtime adapter", () => {
 			).not.toThrow();
 			expect(() =>
 				validateHarnessCliRuntimeArgs({
+					parsed: parseArgs(["--models", "faux/*:high"]),
+					mode: "interactive",
+					cwd,
+					agentDir: join(cwd, ".pi"),
+					sessionsRoot: join(cwd, ".sessions"),
+					settingsManager: settings,
+					offline: true,
+				}),
+			).not.toThrow();
+			expect(() =>
+				validateHarnessCliRuntimeArgs({
+					parsed: parseArgs(["--prompt-template", "./review.md", "--no-prompt-templates"]),
+					mode: "text",
+					cwd,
+					agentDir: join(cwd, ".pi"),
+					sessionsRoot: join(cwd, ".sessions"),
+					settingsManager: settings,
+					offline: true,
+				}),
+			).not.toThrow();
+			expect(() =>
+				validateHarnessCliRuntimeArgs({
+					parsed: parseArgs(["--harness-runtime", "--use-theme", "dark"]),
+					mode: "interactive",
+					cwd,
+					agentDir: join(cwd, ".pi"),
+					sessionsRoot: join(cwd, ".sessions"),
+					settingsManager: settings,
+					offline: true,
+				}),
+			).not.toThrow();
+			expect(() =>
+				validateHarnessCliRuntimeArgs({
 					parsed: parseArgs(["--harness-runtime", "--mode", "rpc"]),
 					mode: "rpc",
 					cwd,
@@ -116,7 +149,7 @@ describe("Harness CLI runtime adapter", () => {
 					settingsManager: settings,
 					offline: true,
 				}),
-			).toThrow("--fork");
+			).not.toThrow();
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
 		}
@@ -157,6 +190,35 @@ describe("Harness CLI runtime adapter", () => {
 			).rejects.toThrow("Harness session was not found");
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("forks a canonical source Session into the startup cwd", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pi-ds-harness-cli-fork-"));
+		const sourceCwd = await mkdtemp(join(tmpdir(), "pi-ds-harness-cli-fork-source-"));
+		const sessionsRoot = join(cwd, ".sessions");
+		try {
+			const env = new NodeExecutionEnv({ cwd });
+			const repo = new JsonlSessionRepo({ fs: env, sessionsRoot });
+			const source = await repo.create({ cwd: sourceCwd, id: "source" });
+			await source.appendMessage({ role: "user", content: "fork me", timestamp: Date.now() });
+			await source.flush();
+			const sourcePath = (await source.getMetadata()).path;
+
+			expect(
+				await resolveHarnessSessionId(
+					parseArgs(["--fork", sourcePath, "--session-id", "forked"]),
+					cwd,
+					sessionsRoot,
+				),
+			).toBe("forked");
+			const forkedMetadata = (await repo.list({ cwd })).find(({ id }) => id === "forked");
+			expect(forkedMetadata).toMatchObject({ id: "forked", cwd, parentSessionId: "source" });
+			const forked = await repo.open(forkedMetadata!);
+			expect(await forked.findEntries({ type: "message" })).toHaveLength(1);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+			await rm(sourceCwd, { recursive: true, force: true });
 		}
 	});
 });

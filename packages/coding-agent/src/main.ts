@@ -682,12 +682,6 @@ export async function main(args: string[], options?: MainOptions) {
 		(envSessionDir ? expandTildePath(envSessionDir) : undefined) ??
 		startupSettingsManager.getSessionDir();
 	if (parsed.harnessRuntime && !parsed.help && parsed.listModels === undefined) {
-		if (appMode === "interactive") {
-			console.error(chalk.red("Error: --harness-runtime requires --print, --mode json, or --mode rpc"));
-			process.exitCode = 1;
-			restoreStdout();
-			return;
-		}
 		const stdinContent = appMode === "rpc" ? undefined : await readPipedStdin();
 		const harnessProjectTrusted = await resolveProjectTrusted({
 			cwd,
@@ -698,12 +692,19 @@ export async function main(args: string[], options?: MainOptions) {
 				cwd,
 				mode: appMode,
 				settingsManager: startupSettingsManager,
-				hasUI: false,
+				hasUI: appMode === "interactive",
 			}),
 		});
 		const harnessSettingsManager = SettingsManager.create(cwd, agentDir, {
 			projectTrusted: harnessProjectTrusted,
 		});
+		if (appMode === "interactive" && parsed.useTheme !== undefined) {
+			harnessSettingsManager.applyOverrides({ theme: parsed.useTheme });
+		}
+		if (appMode === "interactive") {
+			setCapabilityOverrides(harnessSettingsManager.getTerminalCapabilityOverrides());
+			initTheme(harnessSettingsManager.getTheme(), true);
+		}
 		const { initialMessage, initialImages } =
 			appMode === "rpc"
 				? { initialMessage: undefined, initialImages: undefined }
@@ -711,7 +712,7 @@ export async function main(args: string[], options?: MainOptions) {
 		try {
 			const exitCode = await runHarnessCliRuntime({
 				parsed,
-				mode: appMode === "rpc" ? "rpc" : toPrintOutputMode(appMode),
+				mode: appMode === "interactive" ? "interactive" : appMode === "rpc" ? "rpc" : toPrintOutputMode(appMode),
 				cwd,
 				agentDir,
 				sessionsRoot: sessionDir ?? getSessionsDir(),
@@ -731,6 +732,7 @@ export async function main(args: string[], options?: MainOptions) {
 			console.error(chalk.red(`Error: ${message}`));
 			process.exitCode = 1;
 		} finally {
+			if (appMode === "interactive") stopThemeWatcher();
 			restoreStdout();
 		}
 		return;

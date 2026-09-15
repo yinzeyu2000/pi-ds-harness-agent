@@ -30,11 +30,22 @@
 - write-before-publish 和纯函数 Projection Registry；
 - 确定性的 Profile / Bundle / Patch 组合器；
 - 固定 `pre/guard/approval/around/body/post/result` 顺序的工具流水线、Headless 默认拒绝和结构化阶段异常；
-- 可选 `--harness-runtime` print/JSON/RPC CLI、终端或 RPC 逐工具审批与显式 Extension 工厂加载；
-- 单一 `CodingRuntimeController` 与 durable Projection，统一驱动 print、JSON 和严格 JSONL RPC 消费端；
-- RPC prompt/queue/abort/resume/compaction、Extension 命令、配置切换、树查询/导航和优雅关闭；
+- 可选 `--harness-runtime` 交互/print/JSON/RPC CLI、TUI 或 RPC 逐工具审批与显式 Extension 工厂加载；
+- 单一 `CodingRuntimeController` 与 durable Projection，统一驱动基础 TUI、print、JSON 和严格 JSONL RPC 消费端；
+- Harness TUI 可搜索当前项目的 JSONL Session，并通过 Runtime Host 原子切换 Controller/Projection；
+- Harness TUI 提供 canonical Session 树导航、临时流式覆盖层，以及当前分支 Fork/切换；
+- Harness TUI 提供 model、thinking level 与 Harness Tool Catalog selector，切换 Session/Fork 后保持配置；
+- Harness TUI 可跨项目或按 JSONL 路径切换 Session，并以可恢复 Operation 生成废弃分支摘要；
+- RPC prompt/queue/durable clear/abort/resume/compaction、Extension 命令、配置切换、树查询/导航和优雅关闭；
+- RPC new/clone Session、模型/thinking 目录、Entry cursor/统计读取、跨项目切换与严格有序 burst/shutdown 边界；
+- canonical HTML export，可从 RPC 或 TUI 导出完整树、当前 leaf 与 label；
+- prompt template 在 canonical run intent 写入前展开，并受项目 trust 约束；
+- scoped-model patterns 统一限制 TUI/RPC 模型目录并携带 per-model thinking；
+- RPC Extension UI dialog bridge，支持关联响应、超时和 Runtime replacement 取消；
 - canonical session id/路径/continue、图片初始消息，以及空闲期动态 Tool/Model/thinking level 切换；
 - Extension 命令、Agent/Tool 生命周期、pre-commit 消息变换及可恢复初始输入；
+- Extension Context 的 new/switch/fork/reload 会话操作，以及替换后绑定新 JSONL Session 的 `withSession`；
+- TUI `/new`、`/reload` 与 Runtime Host 并发替换互斥；
 - scoped Tool Catalog，以及纳入恢复配置锚点的版本化工具策略；
 - scoped Prompt Contributor 和不写入消息日志的临时 Prompt View；
 - Pi Models Provider、精确模型选择及恢复时的模型配置校验；
@@ -101,6 +112,7 @@ npm test --workspace=@pi-ds/harness-runtime
 - [M5 插件 SDK 与组合配置开发交接](docs/handoff-m5-plugin-composition.md)
 - [M6 第一批 Coding Runtime 开发交接](docs/handoff-m6-coding-runtime.md)
 - [Harness RPC 协议](docs/harness-rpc.md)
+- [Harness Runtime 兼容矩阵](docs/harness-compatibility-matrix.md)
 - [源码参考台账](docs/source-port-ledger.md)
 - [ADR：唯一 Session 与 Agent Loop](docs/adr/0001-single-session-and-agent-loop.md)
 - [ADR：插件宿主实现](docs/adr/0002-plugin-host-implementation.md)
@@ -110,10 +122,9 @@ npm test --workspace=@pi-ds/harness-runtime
 
 接下来的重点是：
 
-1. 让 TUI 消费 Harness Runtime 与 Projection，不保存第二份权威状态；
-2. 补全跨文件会话切换、Fork、带摘要的树导航和剩余 Extension 兼容边界；
-3. 建立旧 Pi CLI/RPC 行为兼容矩阵并增加协议压力测试；
-4. 扩展 Coding Profile 的崩溃注入与真实交互端到端测试。
+1. 补齐 Extension UI 的产品层焦点与取消边界；
+2. 扩大 JSONL 崩溃注入与 Runtime replacement 并发测试；
+3. 扩展 Coding Profile 的真实交互端到端测试。
 
 完整阶段计划见 [`EXECUTION_PLAN.md`](EXECUTION_PLAN.md)。
 

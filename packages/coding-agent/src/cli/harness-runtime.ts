@@ -6,7 +6,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import type { Api, ImageContent, Model } from "@earendil-works/pi-ai";
 import { createModelBackedCodingRuntime } from "../core/coding-model-runtime.ts";
 import type { CodingRuntime } from "../core/coding-runtime.ts";
-import { CodingRuntimeHost } from "../core/coding-runtime-host.ts";
+import { CodingRuntimeHost, type CodingRuntimeTarget } from "../core/coding-runtime-host.ts";
 import { DEFAULT_THINKING_LEVEL } from "../core/defaults.ts";
 import {
 	createHarnessExtensionContexts,
@@ -14,13 +14,15 @@ import {
 	type LegacyExtensionSpec,
 } from "../core/extensions/index.ts";
 import { ModelRegistry } from "../core/model-registry.ts";
-import { resolveCliModel } from "../core/model-resolver.ts";
+import { resolveCliModel, resolveModelScope, type ScopedModel } from "../core/model-resolver.ts";
 import { ModelRuntime } from "../core/model-runtime.ts";
 import { loadProjectContextFiles } from "../core/resource-loader.ts";
 import type { SettingsManager } from "../core/settings-manager.ts";
 import { allToolNames, type ToolName } from "../core/tools/index.ts";
 import { runCodingPrintMode } from "../modes/coding-print-mode.ts";
+import { CodingInteractiveMode, PiCodingInteractiveView } from "../modes/interactive/coding-interactive-mode.ts";
 import { HarnessRpcApprovalService } from "../modes/rpc/harness-rpc-approval.ts";
+import { HarnessRpcExtensionUIService } from "../modes/rpc/harness-rpc-extension-ui.ts";
 import { runHarnessRpcMode } from "../modes/rpc/harness-rpc-mode.ts";
 import { stripBom } from "../utils/text.ts";
 import { type Args, type Mode, normalizeSessionName } from "./args.ts";
@@ -28,9 +30,11 @@ import { createInteractiveHarnessApproval, type HarnessApprovalPrompt } from "./
 
 const DEFAULT_TOOL_NAMES: readonly ToolName[] = ["read", "bash", "edit", "write"];
 
+export type HarnessCliMode = Mode | "interactive";
+
 export interface RunHarnessCliRuntimeOptions {
 	parsed: Args;
-	mode: Mode;
+	mode: HarnessCliMode;
 	cwd: string;
 	agentDir: string;
 	sessionsRoot: string;
@@ -46,11 +50,10 @@ export function validateHarnessCliRuntimeArgs(options: RunHarnessCliRuntimeOptio
 	const { parsed } = options;
 	const unsupported: string[] = [];
 	if (parsed.resume) unsupported.push("--resume");
-	if (parsed.fork) unsupported.push("--fork");
 	if (parsed.noSession) unsupported.push("--no-session");
-	if (parsed.promptTemplates?.length) unsupported.push("--prompt-template");
-	if (parsed.themes?.length || parsed.useTheme) unsupported.push("--theme/--use-theme");
-	if (parsed.models?.length) unsupported.push("--models");
+	if (parsed.themes?.length || (parsed.useTheme && options.mode !== "interactive")) {
+		unsupported.push("--theme/--use-theme");
+	}
 	if (unsupported.length > 0) {
 		throw new Error(`--harness-runtime does not support ${unsupported.join(", ")} yet`);
 	}
@@ -72,6 +75,30 @@ export async function resolveHarnessSessionId(
 	cwd: string,
 	sessionsRoot: string,
 ): Promise<string | undefined> {
+	if (parsed.fork) {
+		const env = new NodeExecutionEnv({ cwd });
+		const repo = new JsonlSessionRepo({ fs: env, sessionsRoot });
+		const sessions = await repo.list();
+		const requestedPath = resolve(cwd, parsed.fork);
+		const pathMatch = sessions.find(({ path }) => resolve(path) === requestedPath);
+		const idMatches = sessions.filter(({ id }) => id === parsed.fork);
+		const localIdMatches = idMatches.filter((metadata) => resolve(metadata.cwd) === resolve(cwd));
+		const source =
+			pathMatch ??
+			(localIdMatches.length === 1 ? localIdMatches[0] : idMatches.length === 1 ? idMatches[0] : undefined);
+		if (!source) {
+			if (idMatches.length > 1) {
+				throw new Error(`Harness session id is ambiguous across projects; use its JSONL path: ${parsed.fork}`);
+			}
+			throw new Error(`Harness session was not found: ${parsed.fork}`);
+		}
+		const forked = await repo.fork(source, {
+			scope: "branch",
+			cwd,
+			...(parsed.sessionId === undefined ? {} : { id: parsed.sessionId }),
+		});
+		return (await forked.getMetadata()).id;
+	}
 	if (parsed.sessionId) return parsed.sessionId;
 	if (parsed.session) {
 		const env = new NodeExecutionEnv({ cwd });
@@ -99,7 +126,18 @@ export async function runHarnessCliRuntime(options: RunHarnessCliRuntimeOptions)
 		modelRefreshTimeoutMs: 15_000,
 		signal: AbortSignal.timeout(15_000),
 	});
-	const selection = resolveHarnessModel(options.parsed, options.settingsManager, modelRuntime);
+	const modelPatterns = options.parsed.models ?? options.settingsManager.getEnabledModels();
+	const scopedModels =
+		modelPatterns && modelPatterns.length > 0
+			? await resolveModelScope(modelPatterns, modelRuntime, { signal: AbortSignal.timeout(15_000) })
+			: [];
+	const modelsScoped = scopedModels.length > 0;
+	const selection = resolveHarnessModel(options.parsed, options.settingsManager, modelRuntime, scopedModels);
+	let activeModel = selection.model;
+	let activeThinkingLevel = selection.thinkingLevel;
+	const configuredToolNames = resolveHarnessToolNames(options.parsed, options.settingsManager);
+	const promptTemplatePaths = options.parsed.promptTemplates?.map((path) => resolve(options.cwd, path));
+	let activeToolNames: string[] | undefined;
 	if (options.parsed.apiKey) {
 		await modelRuntime.setRuntimeApiKey(selection.model.provider, options.parsed.apiKey, {
 			signal: AbortSignal.timeout(15_000),
@@ -108,67 +146,151 @@ export async function runHarnessCliRuntime(options: RunHarnessCliRuntimeOptions)
 	const sessionId = await resolveHarnessSessionId(options.parsed, options.cwd, options.sessionsRoot);
 	const legacyExtensions = await loadHarnessLegacyExtensions(options.parsed.extensions ?? [], options.cwd);
 	const rpcApproval = options.mode === "rpc" ? new HarnessRpcApprovalService() : undefined;
-	const systemPromptOptions = {
-		customPrompt: resolvePromptInput(options.parsed.systemPrompt),
-		appendSystemPrompt: options.parsed.appendSystemPrompt?.map(resolvePromptInput).join("\n\n"),
-		contextFiles: options.parsed.noContextFiles
-			? []
-			: loadProjectContextFiles({
-					cwd: options.cwd,
-					agentDir: options.agentDir,
-					includeProject: options.projectTrusted ?? false,
-				}),
-	};
+	const rpcExtensionUI = options.mode === "rpc" ? new HarnessRpcExtensionUIService() : undefined;
+	const interactiveView =
+		options.mode === "interactive"
+			? new PiCodingInteractiveView({
+					tuiMode: options.parsed.tuiMode ?? options.settingsManager.getTuiMode(),
+					showHardwareCursor: options.settingsManager.getShowHardwareCursor(),
+					clearOnShrink: options.settingsManager.getClearOnShrink(),
+					logDirectory: options.agentDir,
+					fullscreenCopyOnSelect: options.settingsManager.getFullscreenCopyOnSelect(),
+				})
+			: undefined;
 	let runtime: CodingRuntime | undefined;
 	let runtimeHost: CodingRuntimeHost | undefined;
-	const extensionContexts = createHarnessExtensionContexts({
-		cwd: options.cwd,
-		mode: options.mode === "text" ? "print" : options.mode,
-		modelRegistry: new ModelRegistry(modelRuntime),
-		systemPromptOptions: { cwd: options.cwd, ...systemPromptOptions },
-		getRuntime: () => {
-			if (runtimeHost) {
-				const snapshot = runtimeHost.snapshot;
-				return {
-					driver: runtimeHost.controller.driver,
-					sessionId: snapshot.session.id,
-					sessionPath: snapshot.session.path,
-					getSessionName: () => snapshot.session.name,
-				};
-			}
-			if (!runtime) throw new Error("Coding Runtime is not active");
+	const modelRegistry = new ModelRegistry(modelRuntime);
+	const getRuntime = () => {
+		if (runtimeHost) {
+			const snapshot = runtimeHost.snapshot;
 			return {
-				driver: runtime.driver,
-				sessionId: runtime.sessionId,
-				sessionPath: runtime.sessionPath,
-				getSessionName: () => runtime!.legacyExtensionSet.runtime.getSessionName(),
+				driver: runtimeHost.controller.driver,
+				sessionId: snapshot.session.id,
+				sessionPath: snapshot.session.path,
+				getSessionName: () => snapshot.session.name,
 			};
-		},
-		isProjectTrusted: options.projectTrusted ?? false,
-	});
-	const createRuntime = (targetSessionId: string | undefined) =>
-		createModelBackedCodingRuntime({
-			cwd: options.cwd,
+		}
+		if (!runtime) throw new Error("Coding Runtime is not active");
+		return {
+			driver: runtime.driver,
+			sessionId: runtime.sessionId,
+			sessionPath: runtime.sessionPath,
+			getSessionName: () => runtime!.legacyExtensionSet.runtime.getSessionName(),
+		};
+	};
+	const getRuntimeHost = () => {
+		if (!runtimeHost) throw new Error("Coding Runtime Host is not active");
+		return runtimeHost;
+	};
+	const listSelectableModels = (): readonly Model<Api>[] =>
+		modelsScoped ? scopedModels.map(({ model }) => model) : modelRuntime.getAvailableSnapshot();
+	const handleModelChanged = async (model: Model<Api>) => {
+		activeModel = model;
+		let scoped = scopedModels.find(
+			(candidate) => candidate.model.provider === model.provider && candidate.model.id === model.id,
+		);
+		if (modelsScoped && !scoped) {
+			scoped = { model };
+			scopedModels.push(scoped);
+		}
+		if (scoped?.thinkingLevel !== undefined) {
+			activeThinkingLevel = scoped.thinkingLevel;
+			await getRuntimeHost().controller.setThinkingLevel(scoped.thinkingLevel);
+		}
+	};
+	const resolveSessionMetadata = async (reference: string) => {
+		const host = getRuntimeHost();
+		const sessions = await host.controller.listSessions("all");
+		const resolvedReference = resolve(host.snapshot.session.cwd, reference);
+		const matches = sessions.filter(({ id, path }) => id === reference || resolve(path) === resolvedReference);
+		if (matches.length === 1) return matches[0]!;
+		if (matches.length > 1) {
+			throw new Error(`Session id is ambiguous across projects; use its JSONL path: ${reference}`);
+		}
+		throw new Error(`Harness session was not found: ${reference}`);
+	};
+	const initialCwd = resolve(options.cwd);
+	const createRuntime = async (target: CodingRuntimeTarget) => {
+		if (runtimeHost) interactiveView?.resetExtensionUI();
+		const targetCwd = resolve(target.cwd);
+		const projectTrusted = targetCwd === initialCwd && (options.projectTrusted ?? false);
+		const systemPromptOptions = {
+			customPrompt: resolvePromptInput(options.parsed.systemPrompt),
+			appendSystemPrompt: options.parsed.appendSystemPrompt?.map(resolvePromptInput).join("\n\n"),
+			contextFiles: options.parsed.noContextFiles
+				? []
+				: loadProjectContextFiles({
+						cwd: targetCwd,
+						agentDir: options.agentDir,
+						includeProject: projectTrusted,
+					}),
+		};
+		const extensionContexts = createHarnessExtensionContexts({
+			cwd: targetCwd,
+			mode: options.mode === "text" ? "print" : options.mode === "interactive" ? "tui" : options.mode,
+			modelRegistry,
+			systemPromptOptions: { cwd: targetCwd, ...systemPromptOptions },
+			getRuntime,
+			isProjectTrusted: projectTrusted,
+			ui: rpcExtensionUI?.context ?? interactiveView?.getExtensionUIContext(),
+			hasUI: rpcExtensionUI !== undefined || interactiveView !== undefined,
+			sessionOperations: {
+				async newSession(parentSession) {
+					const host = getRuntimeHost();
+					const parentSessionId = parentSession ? (await resolveSessionMetadata(parentSession)).id : undefined;
+					await host.newSession({
+						cwd: host.snapshot.session.cwd,
+						...(parentSessionId === undefined ? {} : { parentSessionId }),
+					});
+				},
+				async fork(entryId, position) {
+					await getRuntimeHost().forkAndSwitch({ entryId, position });
+				},
+				async switchSession(sessionPath) {
+					const metadata = await resolveSessionMetadata(sessionPath);
+					await getRuntimeHost().switchSession({ sessionId: metadata.id, cwd: metadata.cwd });
+				},
+				async reload() {
+					await getRuntimeHost().reload();
+				},
+			},
+		});
+		const created = await createModelBackedCodingRuntime({
+			cwd: targetCwd,
 			sessionsRoot: options.sessionsRoot,
-			sessionId: targetSessionId,
+			sessionId: target.sessionId,
+			parentSessionId: target.parentSessionId,
 			agentDir: options.agentDir,
 			models: modelRuntime,
-			model: selection.model,
-			thinkingLevel: selection.thinkingLevel,
+			model: activeModel,
+			thinkingLevel: activeThinkingLevel,
 			compactionSettings: options.settingsManager.getCompactionSettings(),
 			approval:
-				rpcApproval ?? (options.approvalPrompt ? createInteractiveHarnessApproval(options.approvalPrompt) : undefined),
-			toolNames: resolveHarnessToolNames(options.parsed, options.settingsManager),
+				rpcApproval ??
+				(interactiveView
+					? createInteractiveHarnessApproval((message, signal) => interactiveView.requestApproval(message, signal))
+					: options.approvalPrompt
+						? createInteractiveHarnessApproval(options.approvalPrompt)
+						: undefined),
+			toolNames:
+				activeToolNames?.filter((name): name is ToolName => allToolNames.has(name as ToolName)) ??
+				configuredToolNames,
 			skillPaths: options.parsed.skills,
 			includeDefaultSkills: !options.parsed.noSkills,
-			projectTrusted: options.projectTrusted ?? false,
+			promptTemplatePaths,
+			includeDefaultPromptTemplates: !options.parsed.noPromptTemplates,
+			projectTrusted,
 			legacyExtensions,
 			legacyExtensionFlagValues: options.parsed.unknownFlags,
 			legacyExtensionContext: extensionContexts.context,
 			legacyExtensionCommandContext: extensionContexts.commandContext,
 			systemPromptOptions,
 		});
-	runtime = await createRuntime(sessionId);
+		if (activeToolNames) created.legacyExtensionSet.runtime.setActiveTools(activeToolNames);
+		return created;
+	};
+	runtime = await createRuntime({ sessionId, cwd: initialCwd });
+	activeToolNames = [...runtime.toolNames];
 	if (options.parsed.name !== undefined) {
 		const name = normalizeSessionName(options.parsed.name);
 		if (!name) throw new Error("--name requires a non-empty value");
@@ -179,9 +301,37 @@ export async function runHarnessCliRuntime(options: RunHarnessCliRuntimeOptions)
 		runtimeHost = await CodingRuntimeHost.create(runtime, createRuntime);
 		return runHarnessRpcMode(runtime, {
 			approval: rpcApproval,
+			extensionUI: rpcExtensionUI,
 			host: runtimeHost,
 			resolveModel: (provider, model) => modelRuntime.getModel(provider, model),
+			listModels: listSelectableModels,
+			modelsScoped,
+			onModelChanged: handleModelChanged,
+			onThinkingLevelChanged: (level) => {
+				activeThinkingLevel = level;
+			},
+			onToolsChanged: (names) => {
+				activeToolNames = [...names];
+			},
 		});
+	}
+	if (options.mode === "interactive") {
+		runtimeHost = await CodingRuntimeHost.create(runtime, createRuntime);
+		return new CodingInteractiveMode(runtimeHost, {
+			view: interactiveView!,
+			availableModels: listSelectableModels,
+			onModelChanged: handleModelChanged,
+			onThinkingLevelChanged: (level) => {
+				activeThinkingLevel = level;
+			},
+			onToolsChanged: (names) => {
+				activeToolNames = [...names];
+			},
+			initialInputs: [
+				createInitialInput(options.initialMessage, options.initialImages),
+				...options.parsed.messages,
+			].filter((input): input is string | AgentMessage => input !== undefined),
+		}).run();
 	}
 	return runCodingPrintMode(runtime, {
 		mode: options.mode,
@@ -218,6 +368,7 @@ function resolveHarnessModel(
 	parsed: Args,
 	settingsManager: SettingsManager,
 	modelRuntime: ModelRuntime,
+	scopedModels: readonly ScopedModel[],
 ): { model: Model<Api>; thinkingLevel: ThinkingLevel } {
 	if (parsed.provider && !parsed.model) {
 		throw new Error("--provider requires --model when using --harness-runtime");
@@ -231,10 +382,17 @@ function resolveHarnessModel(
 	if (cliSelection.error) throw new Error(cliSelection.error);
 	if (cliSelection.warning) console.error(`Warning: ${cliSelection.warning}`);
 	let model = cliSelection.model;
+	let scopedThinkingLevel: ThinkingLevel | undefined;
 	if (!model) {
 		const defaultProvider = settingsManager.getDefaultProvider();
 		const defaultModel = settingsManager.getDefaultModel();
-		model = defaultProvider && defaultModel ? modelRuntime.getModel(defaultProvider, defaultModel) : undefined;
+		const savedScopedModel = scopedModels.find(
+			({ model: candidate }) => candidate.provider === defaultProvider && candidate.id === defaultModel,
+		);
+		const scopedModel = savedScopedModel ?? scopedModels[0];
+		model = scopedModel?.model;
+		scopedThinkingLevel = scopedModel?.thinkingLevel;
+		model ??= defaultProvider && defaultModel ? modelRuntime.getModel(defaultProvider, defaultModel) : undefined;
 	}
 	model ??= modelRuntime.getAvailableSnapshot()[0];
 	if (!model) {
@@ -243,6 +401,7 @@ function resolveHarnessModel(
 	const thinkingLevel =
 		parsed.thinking ??
 		cliSelection.thinkingLevel ??
+		scopedThinkingLevel ??
 		settingsManager.getModelThinkingLevel(model.provider, model.id) ??
 		settingsManager.getDefaultThinkingLevel() ??
 		DEFAULT_THINKING_LEVEL;

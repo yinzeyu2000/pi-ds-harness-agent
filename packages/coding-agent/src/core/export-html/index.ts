@@ -1,6 +1,6 @@
-import type { AgentState } from "@earendil-works/pi-agent-core";
-import { existsSync, readFileSync, writeFileSync } from "fs";
-import { basename, join } from "path";
+import type { AgentState, Entry, Session } from "@earendil-works/pi-agent-core";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { basename, dirname, join } from "path";
 import { APP_NAME, getExportTemplateDir } from "../../config.ts";
 import { getResolvedThemeColors, getThemeExportColors } from "../../modes/interactive/theme/theme.ts";
 import { normalizePath, resolvePath } from "../../utils/paths.ts";
@@ -127,9 +127,20 @@ function generateThemeVars(themeName?: string): string {
 	return lines.join("\n      ");
 }
 
+interface HtmlSessionHeader {
+	type: "session";
+	version?: number;
+	id: string;
+	timestamp: string | number;
+	cwd: string;
+	parentSession?: string;
+}
+
+type HtmlExportEntry = SessionEntry | Entry;
+
 interface SessionData {
-	header: ReturnType<SessionManager["getHeader"]>;
-	entries: ReturnType<SessionManager["getEntries"]>;
+	header: HtmlSessionHeader | null;
+	entries: HtmlExportEntry[];
 	leafId: string | null;
 	systemPrompt?: string;
 	tools?: Array<Pick<ToolDefinition, "name" | "description" | "parameters">>;
@@ -181,7 +192,7 @@ const TEMPLATE_RENDERED_TOOLS = new Set(["bash", "read", "write", "edit", "ls"])
  * Pre-render custom tools to HTML using their TUI renderers.
  */
 function preRenderCustomTools(
-	entries: SessionEntry[],
+	entries: HtmlExportEntry[],
 	toolRenderer: ToolHtmlRenderer,
 ): Record<string, RenderedToolHtml> {
 	const renderedTools: Record<string, RenderedToolHtml> = {};
@@ -311,6 +322,66 @@ export async function exportFromFile(inputPath: string, options?: ExportOptions 
 		outputPath = `${APP_NAME}-session-${inputBasename}.html`;
 	}
 
+	writeFileSync(outputPath, html, "utf8");
+	return outputPath;
+}
+
+export interface CanonicalSessionExportSource {
+	session: Session;
+	sessionPath: string;
+	sessionId: string;
+	cwd: string;
+	systemPrompt?: string;
+}
+
+/** Export a Harness canonical Session without opening a legacy SessionManager. */
+export async function exportCanonicalSessionToHtml(
+	source: CanonicalSessionExportSource,
+	options: ExportOptions = {},
+): Promise<string> {
+	await source.session.flush();
+	const [metadata, canonicalEntries, leafId] = await Promise.all([
+		source.session.getMetadata(),
+		source.session.findEntries({ order: "oldestFirst" }),
+		source.session.getLeafId(),
+	]);
+	const entries: HtmlExportEntry[] = [...canonicalEntries];
+	const usedIds = new Set(entries.map(({ id }) => id));
+	for (const entry of canonicalEntries) {
+		const label = await source.session.getLabel(entry.id);
+		if (label === undefined) continue;
+		let id = `__harness_export_label_${entry.id}`;
+		while (usedIds.has(id)) id = `_${id}`;
+		usedIds.add(id);
+		entries.push({
+			type: "label",
+			id,
+			parentId: entry.id,
+			timestamp: new Date(entry.timestamp).toISOString(),
+			targetId: entry.id,
+			label,
+		});
+	}
+
+	const sessionData: SessionData = {
+		header: {
+			type: "session",
+			version: 4,
+			id: source.sessionId,
+			timestamp: metadata.createdAt,
+			cwd: source.cwd,
+			...(metadata.parentSessionId === undefined ? {} : { parentSession: metadata.parentSessionId }),
+		},
+		entries,
+		leafId,
+		...(source.systemPrompt === undefined ? {} : { systemPrompt: source.systemPrompt }),
+	};
+	const html = generateHtml(sessionData, options.themeName);
+	const outputPath = resolvePath(
+		options.outputPath ?? `${APP_NAME}-session-${basename(source.sessionPath, ".jsonl")}.html`,
+		source.cwd,
+	);
+	mkdirSync(dirname(outputPath), { recursive: true });
 	writeFileSync(outputPath, html, "utf8");
 	return outputPath;
 }

@@ -622,3 +622,30 @@ Analyze GitHub issue(s): $ARGUMENTS`,
 		} catch {}
 	});
 });
+
+describe("loadPromptTemplates - trusted defaults", () => {
+	const testRoot = join(tmpdir(), `pi-test-prompt-trust-${Date.now()}`);
+	const cwd = join(testRoot, "project");
+	const agentDir = join(testRoot, "agent");
+
+	test("loads global defaults while excluding untrusted project defaults", () => {
+		mkdirSync(join(agentDir, "prompts"), { recursive: true });
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(join(agentDir, "prompts", "global.md"), "global");
+		writeFileSync(join(cwd, ".pi", "prompts", "project.md"), "project");
+
+		const templates = loadPromptTemplates({
+			cwd,
+			agentDir,
+			promptPaths: [],
+			includeDefaults: true,
+			includeProjectDefaults: false,
+		});
+
+		expect(templates.map(({ name }) => name)).toEqual(["global"]);
+	});
+
+	afterAll(() => {
+		rmSync(testRoot, { recursive: true, force: true });
+	});
+});

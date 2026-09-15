@@ -5,6 +5,7 @@ import { flushRawStdout, writeRawStdout } from "../../core/output-guard.ts";
 import type { HarnessRpcSessionOptions } from "./harness-rpc.ts";
 import { type HarnessRpcCommand, type HarnessRpcResponse, HarnessRpcSession } from "./harness-rpc.ts";
 import type { HarnessRpcApprovalService } from "./harness-rpc-approval.ts";
+import type { HarnessRpcExtensionUIService } from "./harness-rpc-extension-ui.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
 
 export interface HarnessRpcModeOptions {
@@ -13,6 +14,12 @@ export interface HarnessRpcModeOptions {
 	flush?: () => void | Promise<void>;
 	approval?: HarnessRpcApprovalService;
 	resolveModel?: HarnessRpcSessionOptions["resolveModel"];
+	listModels?: HarnessRpcSessionOptions["listModels"];
+	modelsScoped?: HarnessRpcSessionOptions["modelsScoped"];
+	extensionUI?: HarnessRpcExtensionUIService;
+	onModelChanged?: HarnessRpcSessionOptions["onModelChanged"];
+	onThinkingLevelChanged?: HarnessRpcSessionOptions["onThinkingLevelChanged"];
+	onToolsChanged?: HarnessRpcSessionOptions["onToolsChanged"];
 	host?: CodingRuntimeHost;
 }
 
@@ -26,7 +33,16 @@ export async function runHarnessRpcMode(runtime: CodingRuntime, options: Harness
 		outputTail = outputTail.then(() => write(serializeJsonLine(value)));
 		return outputTail;
 	};
-	const sessionOptions = { approval: options.approval, resolveModel: options.resolveModel };
+	const sessionOptions = {
+		approval: options.approval,
+		resolveModel: options.resolveModel,
+		listModels: options.listModels,
+		modelsScoped: options.modelsScoped,
+		extensionUI: options.extensionUI,
+		onModelChanged: options.onModelChanged,
+		onThinkingLevelChanged: options.onThinkingLevelChanged,
+		onToolsChanged: options.onToolsChanged,
+	};
 	const rpc = options.host
 		? await HarnessRpcSession.createHosted(options.host, output, sessionOptions)
 		: await HarnessRpcSession.create(runtime, output, sessionOptions);
@@ -86,19 +102,91 @@ export function parseHarnessRpcCommand(line: string): HarnessRpcCommand {
 			if (typeof parsed.message !== "string") throw new Error(`${parsed.type} requires a string message`);
 			return { ...(id === undefined ? {} : { id }), type: parsed.type, message: parsed.message };
 		case "abort":
+		case "clear_queue":
 		case "resume":
 		case "get_snapshot":
 		case "get_messages":
+		case "get_session_stats":
+		case "get_last_assistant_text":
+		case "get_fork_messages":
 		case "get_commands":
+		case "get_available_models":
+		case "get_available_thinking_levels":
+		case "cycle_model":
+		case "cycle_thinking_level":
 		case "get_recovery":
 		case "get_tree":
 		case "shutdown":
 			return { ...(id === undefined ? {} : { id }), type: parsed.type };
+		case "get_entries":
+			if (parsed.since !== undefined && typeof parsed.since !== "string") {
+				throw new Error("get_entries since must be a string");
+			}
+			return {
+				...(id === undefined ? {} : { id }),
+				type: "get_entries",
+				...(parsed.since === undefined ? {} : { since: parsed.since }),
+			};
+		case "export_html":
+			if (parsed.outputPath !== undefined && typeof parsed.outputPath !== "string") {
+				throw new Error("export_html outputPath must be a string");
+			}
+			return {
+				...(id === undefined ? {} : { id }),
+				type: "export_html",
+				...(parsed.outputPath === undefined ? {} : { outputPath: parsed.outputPath }),
+			};
+		case "extension_ui_response":
+			if (id === undefined) throw new Error("extension_ui_response requires a string id");
+			if (parsed.cancelled === true) return { type: "extension_ui_response", id, cancelled: true };
+			if (typeof parsed.value === "string") return { type: "extension_ui_response", id, value: parsed.value };
+			if (typeof parsed.confirmed === "boolean") {
+				return { type: "extension_ui_response", id, confirmed: parsed.confirmed };
+			}
+			throw new Error("extension_ui_response requires value, confirmed, or cancelled");
+		case "clone":
+			if (parsed.sessionId !== undefined && typeof parsed.sessionId !== "string") {
+				throw new Error("clone sessionId must be a string");
+			}
+			return {
+				...(id === undefined ? {} : { id }),
+				type: "clone",
+				...(parsed.sessionId === undefined ? {} : { sessionId: parsed.sessionId }),
+			};
+		case "new_session":
+			if (parsed.sessionId !== undefined && typeof parsed.sessionId !== "string") {
+				throw new Error("new_session sessionId must be a string");
+			}
+			if (parsed.parentSession !== undefined && typeof parsed.parentSession !== "string") {
+				throw new Error("new_session parentSession must be a string");
+			}
+			return {
+				...(id === undefined ? {} : { id }),
+				type: "new_session",
+				...(parsed.sessionId === undefined ? {} : { sessionId: parsed.sessionId }),
+				...(parsed.parentSession === undefined ? {} : { parentSession: parsed.parentSession }),
+			};
 		case "navigate":
 			if (parsed.entryId !== null && typeof parsed.entryId !== "string") {
 				throw new Error("navigate requires a string or null entryId");
 			}
-			return { ...(id === undefined ? {} : { id }), type: "navigate", entryId: parsed.entryId };
+			if (parsed.summarize !== undefined && typeof parsed.summarize !== "boolean") {
+				throw new Error("navigate summarize must be a boolean");
+			}
+			if (parsed.customInstructions !== undefined && typeof parsed.customInstructions !== "string") {
+				throw new Error("navigate customInstructions must be a string");
+			}
+			if (parsed.label !== undefined && typeof parsed.label !== "string") {
+				throw new Error("navigate label must be a string");
+			}
+			return {
+				...(id === undefined ? {} : { id }),
+				type: "navigate",
+				entryId: parsed.entryId,
+				...(parsed.summarize === undefined ? {} : { summarize: parsed.summarize }),
+				...(parsed.customInstructions === undefined ? {} : { customInstructions: parsed.customInstructions }),
+				...(parsed.label === undefined ? {} : { label: parsed.label }),
+			};
 		case "fork_session":
 		case "fork_and_switch":
 			if (parsed.sessionId !== undefined && typeof parsed.sessionId !== "string") {
@@ -119,7 +207,15 @@ export function parseHarnessRpcCommand(line: string): HarnessRpcCommand {
 			};
 		case "switch_session":
 			if (typeof parsed.sessionId !== "string") throw new Error("switch_session requires a string sessionId");
-			return { ...(id === undefined ? {} : { id }), type: "switch_session", sessionId: parsed.sessionId };
+			if (parsed.cwd !== undefined && typeof parsed.cwd !== "string") {
+				throw new Error("switch_session cwd must be a string");
+			}
+			return {
+				...(id === undefined ? {} : { id }),
+				type: "switch_session",
+				sessionId: parsed.sessionId,
+				...(parsed.cwd === undefined ? {} : { cwd: parsed.cwd }),
+			};
 		case "invoke_command":
 			if (typeof parsed.name !== "string") throw new Error("invoke_command requires a string name");
 			if (parsed.args !== undefined && typeof parsed.args !== "string") {
@@ -136,16 +232,22 @@ export function parseHarnessRpcCommand(line: string): HarnessRpcCommand {
 				throw new Error("set_active_tools requires a string names array");
 			}
 			return { ...(id === undefined ? {} : { id }), type: "set_active_tools", names: [...parsed.names] };
-		case "set_model":
-			if (typeof parsed.provider !== "string" || typeof parsed.model !== "string") {
-				throw new Error("set_model requires string provider and model values");
+		case "set_model": {
+			if (typeof parsed.provider !== "string") {
+				throw new Error("set_model requires a string provider");
 			}
+			if (parsed.model !== undefined && parsed.modelId !== undefined && parsed.model !== parsed.modelId) {
+				throw new Error("set_model model and modelId values must match when both are provided");
+			}
+			const model = typeof parsed.model === "string" ? parsed.model : parsed.modelId;
+			if (typeof model !== "string") throw new Error("set_model requires a string model or modelId");
 			return {
 				...(id === undefined ? {} : { id }),
 				type: "set_model",
 				provider: parsed.provider,
-				model: parsed.model,
+				model,
 			};
+		}
 		case "set_thinking_level":
 			if (!isThinkingLevel(parsed.level)) {
 				throw new Error("set_thinking_level requires a valid thinking level");

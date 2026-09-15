@@ -3,6 +3,16 @@
  */
 
 export { type CodingPrintModeOptions, runCodingPrintMode } from "./coding-print-mode.ts";
+export {
+	CodingInteractiveMode,
+	type CodingInteractiveModeOptions,
+	type CodingInteractiveSessionInfo,
+	type CodingInteractiveTreeItem,
+	type CodingInteractiveView,
+	type CodingInteractiveViewHandlers,
+	PiCodingInteractiveView,
+	type PiCodingInteractiveViewOptions,
+} from "./interactive/coding-interactive-mode.ts";
 export { InteractiveMode, type InteractiveModeOptions } from "./interactive/interactive-mode.ts";
 export type { JsonAgentSessionEvent } from "./json-event.ts";
 export { type PrintModeOptions, runPrintMode } from "./print-mode.ts";

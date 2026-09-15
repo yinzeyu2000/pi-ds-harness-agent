@@ -30,11 +30,22 @@ This project is in early development. The first development batch includes the p
 - write-before-publish and a pure Projection Registry;
 - deterministic Profile / Bundle / Patch composition;
 - a fixed `pre/guard/approval/around/body/post/result` tool pipeline with headless fail-closed approval and structured stage errors;
-- an opt-in `--harness-runtime` print/JSON/RPC CLI, per-tool terminal or RPC approval, and explicit Extension factory loading;
-- one `CodingRuntimeController` and durable Projection shared by print, JSON, and strict JSONL RPC consumers;
-- RPC prompt/queue/abort/resume/compaction, Extension commands, runtime configuration, tree query/navigation, and graceful shutdown;
+- an opt-in `--harness-runtime` interactive/print/JSON/RPC CLI, per-tool TUI or RPC approval, and explicit Extension factory loading;
+- one `CodingRuntimeController` and durable Projection shared by the basic TUI, print, JSON, and strict JSONL RPC consumers;
+- a searchable current-project JSONL Session selector that atomically replaces the Controller/Projection through the Runtime Host;
+- canonical Session tree navigation, an ephemeral streaming overlay, and current-branch Fork/switch in the Harness TUI;
+- model, thinking-level, and Harness Tool Catalog selectors that retain configuration across Session/Fork switches;
+- cross-project or explicit-JSONL Session switching and recoverable abandoned-branch summarization;
+- RPC prompt/queue/durable clear/abort/resume/compaction, Extension commands, runtime configuration, tree query/navigation, and graceful shutdown;
+- RPC new/clone Session, model/thinking catalogues, entry cursors/statistics, cross-project switching, and ordered burst/shutdown boundaries;
+- canonical HTML export from RPC or TUI, including the full tree, current leaf, and labels;
+- prompt-template expansion before canonical run-intent persistence, guarded by project trust;
+- scoped-model patterns shared by TUI/RPC with per-model thinking levels;
+- an RPC Extension UI dialog bridge with correlated responses, timeouts, and Runtime-replacement cancellation;
 - canonical session id/path/continue, image-bearing initial messages, and idle-time Tool/Model/thinking-level changes;
 - Extension commands, Agent/Tool lifecycle bindings, pre-commit message transforms, and recoverable initial inputs;
+- Extension Context new/switch/fork/reload operations with `withSession` rebound to the replacement JSONL Session;
+- TUI `/new`, `/reload`, and serialized Runtime Host replacement;
 - a scoped Tool Catalog with versioned policies included in recovery configuration anchors;
 - scoped Prompt Contributors and an ephemeral Prompt View that does not create conversation messages;
 - a Pi Models Provider with exact model selection and recovery-time model validation;
@@ -101,6 +112,7 @@ Pi generates its model catalog outside Git, so `hydrate:model-data` must run onc
 - [M5 plugin SDK and composition handoff](docs/handoff-m5-plugin-composition.md)
 - [M6 first Coding Runtime handoff](docs/handoff-m6-coding-runtime.md)
 - [Harness RPC protocol](docs/harness-rpc.md)
+- [Harness Runtime compatibility matrix](docs/harness-compatibility-matrix.md)
 - [Source-port ledger](docs/source-port-ledger.md)
 - [ADR: one Session and Agent Loop](docs/adr/0001-single-session-and-agent-loop.md)
 - [ADR: PluginHost implementation](docs/adr/0002-plugin-host-implementation.md)
@@ -110,10 +122,9 @@ Pi generates its model catalog outside Git, so `hydrate:model-data` must run onc
 
 The next priorities are:
 
-1. make the TUI consume Harness Runtime and Projections without a second authoritative state;
-2. complete cross-file session switching, Fork, summarized tree navigation, and the remaining Extension compatibility boundaries;
-3. establish the legacy Pi CLI/RPC compatibility matrix and add protocol stress tests;
-4. extend Coding Profile crash-injection and real interactive end-to-end coverage.
+1. complete product-level focus and cancellation boundaries for Extension UI;
+2. expand JSONL crash injection and Runtime replacement concurrency tests;
+3. extend Coding Profile real interactive end-to-end coverage.
 
 See [`EXECUTION_PLAN.md`](EXECUTION_PLAN.md) for the complete staged plan.
 

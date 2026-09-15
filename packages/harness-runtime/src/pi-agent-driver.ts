@@ -9,11 +9,14 @@ import {
 	type AgentToolResult,
 	type BeforeToolCallContext,
 	type BeforeToolCallResult,
+	type BranchSummaryEntry,
+	type BranchSummaryResult,
 	buildSessionContext,
 	type CompactionEntry,
 	type CompactionPreparation,
 	type CompactionSettings,
 	type CompactResult,
+	collectEntriesForBranchSummary,
 	type Entry,
 	type JsonValue,
 	type OperationFinishedRecord,
@@ -27,7 +30,7 @@ import {
 	type ThinkingLevel,
 	type ToolStartedRecord,
 } from "@earendil-works/pi-agent-core";
-import { type Model, type ToolResultMessage, uuidv7, validateToolArguments } from "@earendil-works/pi-ai";
+import { type Api, type Model, type ToolResultMessage, uuidv7, validateToolArguments } from "@earendil-works/pi-ai";
 import { LiveEventBus } from "./events.ts";
 
 export interface PiAgentDriverOptions {
@@ -74,8 +77,17 @@ export interface DriverCompactionService {
 	settings: CompactionSettings;
 	execute(
 		preparation: CompactionPreparation,
-		options: { customInstructions?: string; signal: AbortSignal },
+		options: {
+			customInstructions?: string;
+			signal: AbortSignal;
+			model?: Model<Api>;
+			thinkingLevel?: ThinkingLevel;
+		},
 	): Promise<CompactResult>;
+	summarizeBranch?(
+		entries: Entry[],
+		options: { customInstructions?: string; signal: AbortSignal; model: Model<Api> },
+	): Promise<BranchSummaryResult>;
 }
 
 export interface ToolReconciliationRequest {
@@ -126,6 +138,11 @@ export interface RequestConfigurationAnchorV1 {
 	}[];
 }
 
+export interface ClearedAgentQueues {
+	steering: AgentMessage[];
+	followUp: AgentMessage[];
+}
+
 export type PiAgentRecoveryErrorCode =
 	| "nothing_to_resume"
 	| "multiple_open_operations"
@@ -152,7 +169,7 @@ export type PiAgentRecoveryState =
 	| {
 			status: "resumable";
 			runId: string;
-			point: "operation_start" | "initial_messages" | "message_tail" | "tool_batch";
+			point: "operation_start" | "initial_messages" | "message_tail" | "tool_batch" | "navigation";
 	  }
 	| {
 			status: "settleable";
@@ -189,7 +206,11 @@ export class PiAgentDriver {
 	private readonly toolCalls = new Map<string, { assistantEntryId: string; toolIndex: number }>();
 	private readonly pendingToolResults = new Map<string, { resultEntryId: string }>();
 	private readonly queuedEntryIds = new WeakMap<object, string>();
-	private readonly pendingQueueEntries = new Map<string, { runId: string }>();
+	private readonly pendingQueueEntries = new Map<
+		string,
+		{ runId: string; queue: "steer" | "followUp"; message: AgentMessage }
+	>();
+	private queueMutationTail: Promise<void> = Promise.resolve();
 	private activeRunId?: string;
 	private suspendedOperation?: OperationStartedRecord;
 	private recoveryConfigurationIssue?: Extract<PiAgentRecoveryState, { status: "blocked" }>;
@@ -201,6 +222,7 @@ export class PiAgentDriver {
 	private assistantAttempt = 0;
 	private activeTelemetryContext?: TelemetryContext;
 	private activeRecovery = false;
+	private activeOperationPromise?: Promise<void>;
 
 	private constructor(
 		session: Session,
@@ -272,17 +294,46 @@ export class PiAgentDriver {
 	}
 
 	async navigateTo(entryId: string | null): Promise<void> {
-		this.assertConfigurationMutable("session branch");
+		return this.navigateTree(entryId);
+	}
+
+	async navigateTree(
+		entryId: string | null,
+		options: { summarize?: boolean; customInstructions?: string; label?: string } = {},
+	): Promise<void> {
+		this.assertCanStart();
 		if (this.hasPendingMessages()) throw new Error("Cannot navigate while queued messages are pending");
-		const recovery = await this.getRecoveryState();
-		if (recovery.status !== "idle") throw new Error(`Cannot navigate while recovery status is ${recovery.status}`);
 		if (entryId !== null && !(await this.session.getEntry(entryId))) {
 			throw new Error(`Cannot navigate to missing Session entry: ${entryId}`);
 		}
-		await this.session.moveLane("main", entryId);
-		await flushSession(this.session);
-		const entries = entryId ? await this.session.findEntriesOnBranch({ start: entryId, order: "oldestFirst" }) : [];
-		this.agent.state.messages = buildSessionContext(entries).messages;
+		const sourceLeafId = await this.session.getLeafId();
+		if (sourceLeafId === entryId) return;
+		const summarize = options.summarize === true && sourceLeafId !== null;
+		if (summarize && !this.compaction?.summarizeBranch) {
+			throw new Error("Branch summarization service is not available");
+		}
+		this.starting = true;
+		try {
+			const operation = await this.session.appendRecord({
+				type: "operation_started",
+				id: uuidv7(),
+				lane: "main",
+				sourceLeafId,
+				intent: {
+					kind: "navigation",
+					targetId: entryId,
+					summarize,
+					...(options.customInstructions === undefined ? {} : { customInstructions: options.customInstructions }),
+					...(options.label === undefined ? {} : { label: options.label }),
+					...(summarize ? { summaryEntryId: uuidv7() } : {}),
+				},
+			});
+			this.suspendedOperation = operation;
+			await flushSession(this.session);
+			await this.runActiveOperation(operation, () => this.executeNavigation(operation));
+		} finally {
+			this.starting = false;
+		}
 	}
 
 	private assertConfigurationMutable(kind: string): void {
@@ -369,6 +420,8 @@ export class PiAgentDriver {
 				const result = await this.compaction!.execute(prepared.value!, {
 					customInstructions: options.customInstructions,
 					signal: controller.signal,
+					model: this.agent.state.model,
+					thinkingLevel: this.agent.state.thinkingLevel,
 				});
 				entry = await this.session.appendEntry(
 					{
@@ -405,6 +458,101 @@ export class PiAgentDriver {
 			controller.abort();
 			if (this.recoveryAbortController === controller) this.recoveryAbortController = undefined;
 			this.starting = false;
+		}
+	}
+
+	private async executeNavigation(operation: OperationStartedRecord): Promise<void> {
+		if (operation.intent.kind !== "navigation") throw new Error("Expected a navigation operation");
+		const { targetId } = operation.intent;
+		if (targetId !== null && !(await this.session.getEntry(targetId))) {
+			throw new Error(`Cannot navigate to missing Session entry: ${targetId}`);
+		}
+		await this.session.moveLane("main", targetId);
+		await flushSession(this.session);
+		if (operation.intent.summarize) await this.executeBranchSummary(operation);
+		const entries = await this.session.findEntriesOnBranch({ order: "oldestFirst" });
+		this.agent.state.messages = buildSessionContext(entries).messages;
+	}
+
+	private async executeBranchSummary(operation: OperationStartedRecord): Promise<BranchSummaryEntry> {
+		if (operation.intent.kind !== "navigation" || !operation.intent.summarize) {
+			throw new Error("Expected a summarized navigation operation");
+		}
+		const summaryEntryId = operation.intent.summaryEntryId;
+		if (!summaryEntryId || !operation.sourceLeafId) throw new Error("Navigation summary intent is incomplete");
+		const existing = await this.session.getEntry(summaryEntryId);
+		if (existing) {
+			if (existing.type !== "branch_summary") throw new Error("Navigation summary id belongs to another entry type");
+			return existing;
+		}
+		const service = this.compaction?.summarizeBranch;
+		if (!service) throw new Error("Branch summarization service is not available");
+		const attempts = await this.session.findRecords({
+			type: "step_attempt",
+			runId: operation.id,
+			order: "oldestFirst",
+		});
+		const attempt =
+			Math.max(0, ...attempts.flatMap((record) => (record.step === "branch_summary" ? [record.attempt] : []))) + 1;
+		await this.session.appendRecord({
+			type: "step_attempt",
+			id: uuidv7(),
+			lane: "main",
+			runId: operation.id,
+			step: "branch_summary",
+			attempt,
+			resultEntryId: summaryEntryId,
+		});
+		await flushSession(this.session);
+		const abandoned =
+			operation.intent.targetId === null
+				? await this.session.findEntriesOnBranch({
+						start: operation.sourceLeafId,
+						order: "oldestFirst",
+					})
+				: (await collectEntriesForBranchSummary(this.session, operation.sourceLeafId, operation.intent.targetId))
+						.entries;
+		const controller = new AbortController();
+		this.recoveryAbortController = controller;
+		try {
+			const result = await service(abandoned, {
+				customInstructions: operation.intent.customInstructions,
+				signal: controller.signal,
+				model: this.agent.state.model,
+			});
+			if (controller.signal.aborted) throw new Error("Branch summarization aborted");
+			const entry = await this.session.appendEntry<BranchSummaryEntry>(
+				{
+					type: "branch_summary",
+					id: summaryEntryId,
+					fromId: operation.sourceLeafId,
+					summary: result.summary,
+					details: { readFiles: result.readFiles, modifiedFiles: result.modifiedFiles },
+					...(result.usage === undefined ? {} : { usage: result.usage }),
+				},
+				"main",
+			);
+			if (operation.intent.label !== undefined) {
+				await this.session.setLabel(entry.id, operation.intent.label);
+			}
+			if (result.usage) {
+				await this.session.appendRecord({
+					type: "usage",
+					id: uuidv7(),
+					lane: "main",
+					runId: operation.id,
+					cause: "branch_summary",
+					entryId: summaryEntryId,
+					attempt,
+					stopReason: "stop",
+					usage: result.usage,
+				});
+			}
+			await flushSession(this.session);
+			return entry;
+		} finally {
+			controller.abort();
+			if (this.recoveryAbortController === controller) this.recoveryAbortController = undefined;
 		}
 	}
 
@@ -454,14 +602,8 @@ export class PiAgentDriver {
 		const operation = this.suspendedOperation;
 		if (!operation) return { status: "idle" };
 		if (this.recoveryConfigurationIssue) return structuredClone(this.recoveryConfigurationIssue);
-		if (operation.intent.kind !== "run") {
-			return {
-				status: "blocked",
-				runId: operation.id,
-				code: "unsupported_operation",
-				message: `Cannot resume ${operation.intent.kind} operations`,
-			};
-		}
+		if (operation.intent.kind === "navigation") return this.getNavigationRecoveryState(operation);
+		if (operation.intent.kind === "compaction") return this.getCompactionRecoveryState(operation);
 
 		const [records, entries] = await Promise.all([
 			this.session.findRecords({ lane: "main", runId: operation.id, order: "oldestFirst" }),
@@ -581,6 +723,73 @@ export class PiAgentDriver {
 		};
 	}
 
+	private async getNavigationRecoveryState(operation: OperationStartedRecord): Promise<PiAgentRecoveryState> {
+		if (operation.intent.kind !== "navigation") throw new Error("Expected a navigation operation");
+		const records = await this.session.findRecords({ lane: "main", runId: operation.id });
+		if (records.some((record) => record.type === "abort_requested")) {
+			return { status: "settleable", runId: operation.id, outcome: "aborted" };
+		}
+		if (operation.intent.targetId !== null && !(await this.session.getEntry(operation.intent.targetId))) {
+			return {
+				status: "blocked",
+				runId: operation.id,
+				code: "unsupported_operation",
+				message: `Navigation target is missing: ${operation.intent.targetId}`,
+			};
+		}
+		if (operation.intent.summarize) {
+			const summaryEntryId = operation.intent.summaryEntryId;
+			if (!summaryEntryId || !operation.sourceLeafId) {
+				return {
+					status: "blocked",
+					runId: operation.id,
+					code: "unsupported_operation",
+					message: `Navigation operation ${operation.id} has an incomplete summary intent`,
+				};
+			}
+			const summary = await this.session.getEntry(summaryEntryId);
+			if (summary) {
+				return summary.type === "branch_summary"
+					? { status: "settleable", runId: operation.id, outcome: "completed" }
+					: {
+							status: "blocked",
+							runId: operation.id,
+							code: "unsupported_operation",
+							message: `Navigation summary id ${summaryEntryId} belongs to ${summary.type}`,
+						};
+			}
+			return { status: "resumable", runId: operation.id, point: "navigation" };
+		}
+		return (await this.session.getLeafId()) === operation.intent.targetId
+			? { status: "settleable", runId: operation.id, outcome: "completed" }
+			: { status: "resumable", runId: operation.id, point: "navigation" };
+	}
+
+	private async getCompactionRecoveryState(operation: OperationStartedRecord): Promise<PiAgentRecoveryState> {
+		if (operation.intent.kind !== "compaction") throw new Error("Expected a compaction operation");
+		const records = await this.session.findRecords({ lane: "main", runId: operation.id });
+		if (records.some((record) => record.type === "abort_requested")) {
+			return { status: "settleable", runId: operation.id, outcome: "aborted" };
+		}
+		const result = await this.session.getEntry(operation.intent.resultEntryId);
+		if (!result) {
+			return {
+				status: "blocked",
+				runId: operation.id,
+				code: "unsupported_operation",
+				message: `Cannot safely retry compaction operation ${operation.id} before its result is durable`,
+			};
+		}
+		return result.type === "compaction"
+			? { status: "settleable", runId: operation.id, outcome: "completed" }
+			: {
+					status: "blocked",
+					runId: operation.id,
+					code: "unsupported_operation",
+					message: `Compaction result id ${operation.intent.resultEntryId} belongs to ${result.type}`,
+				};
+	}
+
 	async resume(): Promise<void> {
 		this.assertCanResume();
 		this.starting = true;
@@ -598,6 +807,10 @@ export class PiAgentDriver {
 				return;
 			}
 			if (operation.intent.kind !== "run") {
+				if (operation.intent.kind === "navigation" && state.status === "resumable") {
+					await this.runActiveOperation(operation, () => this.executeNavigation(operation), true);
+					return;
+				}
 				throw new PiAgentRecoveryError(
 					"unsupported_operation",
 					`Cannot resume ${operation.intent.kind} operations`,
@@ -649,8 +862,27 @@ export class PiAgentDriver {
 		execute: () => Promise<void>,
 		recovery = false,
 	): Promise<void> {
+		const task = this.runActiveOperationTracked(operation, execute, recovery);
+		this.activeOperationPromise = task;
+		try {
+			await task;
+		} finally {
+			if (this.activeOperationPromise === task) this.activeOperationPromise = undefined;
+		}
+	}
+
+	private runActiveOperationTracked(
+		operation: OperationStartedRecord,
+		execute: () => Promise<void>,
+		recovery: boolean,
+	): Promise<void> {
 		if (!this.telemetry) return this.runActiveOperationBody(operation, execute, recovery);
-		const spanName = operation.intent.kind === "compaction" ? "pi.harness.compaction" : "pi.harness.run";
+		const spanName =
+			operation.intent.kind === "compaction"
+				? "pi.harness.compaction"
+				: operation.intent.kind === "navigation"
+					? "pi.harness.navigation"
+					: "pi.harness.run";
 		return this.telemetry.startSpan(
 			{
 				name: spanName,
@@ -659,7 +891,7 @@ export class PiAgentDriver {
 					"pi.lane.name": "main",
 					"pi.operation.id": operation.id,
 					"pi.operation.recovery": recovery,
-					"pi.operation.kind": operation.intent.kind === "compaction" ? "compaction" : "run",
+					"pi.operation.kind": operation.intent.kind,
 				},
 			},
 			async (span) => {
@@ -776,6 +1008,39 @@ export class PiAgentDriver {
 		await this.enqueue("followUp", input);
 	}
 
+	async clearQueue(): Promise<ClearedAgentQueues> {
+		return this.serializeQueueMutation(async () => {
+			const cleared: ClearedAgentQueues = { steering: [], followUp: [] };
+			const pendingEntries = [...this.pendingQueueEntries];
+			const cancelledEntryIds: string[] = [];
+			try {
+				for (const [entryId, pending] of pendingEntries) {
+					await this.session.appendRecord({
+						type: "queue_cancelled",
+						id: uuidv7(),
+						lane: "main",
+						runId: pending.runId,
+						entryId,
+					});
+					await flushSession(this.session);
+					cancelledEntryIds.push(entryId);
+					cleared[pending.queue === "steer" ? "steering" : "followUp"].push(structuredClone(pending.message));
+				}
+			} catch (error) {
+				this.agent.clearAllQueues();
+				for (const entryId of cancelledEntryIds) this.pendingQueueEntries.delete(entryId);
+				for (const pending of this.pendingQueueEntries.values()) {
+					if (pending.queue === "steer") this.agent.steer(pending.message);
+					else this.agent.followUp(pending.message);
+				}
+				throw error;
+			}
+			this.agent.clearAllQueues();
+			for (const [entryId] of pendingEntries) this.pendingQueueEntries.delete(entryId);
+			return cleared;
+		});
+	}
+
 	abort(): void {
 		if (!this.activeRunId) return;
 		this.abortRequested = true;
@@ -811,8 +1076,8 @@ export class PiAgentDriver {
 		return entryId;
 	}
 
-	waitForIdle(): Promise<void> {
-		return this.agent.waitForIdle();
+	async waitForIdle(): Promise<void> {
+		await Promise.all([this.agent.waitForIdle(), this.activeOperationPromise]);
 	}
 
 	get messages(): readonly AgentMessage[] {
@@ -832,28 +1097,39 @@ export class PiAgentDriver {
 	}
 
 	private async enqueue(queue: "steer" | "followUp", input: string | AgentMessage): Promise<void> {
-		this.assertQueueable(queue === "steer" ? "steer" : "follow up");
-		const runId = this.activeRunId!;
-		const message = normalizeQueuedMessage(input);
-		const entryId = uuidv7();
-		const target: ProvisionedEntry = { type: "message", id: entryId, message };
-		await this.session.appendRecord({
-			type: "queue_enqueued",
-			id: uuidv7(),
-			lane: "main",
-			runId,
-			queue,
-			target,
+		await this.serializeQueueMutation(async () => {
+			this.assertQueueable(queue === "steer" ? "steer" : "follow up");
+			const runId = this.activeRunId!;
+			const message = normalizeQueuedMessage(input);
+			const entryId = uuidv7();
+			const target: ProvisionedEntry = { type: "message", id: entryId, message };
+			await this.session.appendRecord({
+				type: "queue_enqueued",
+				id: uuidv7(),
+				lane: "main",
+				runId,
+				queue,
+				target,
+			});
+			await flushSession(this.session);
+			if (this.abortRequested || this.activeRunId !== runId) {
+				await this.cancelQueueEntry(runId, entryId);
+				return;
+			}
+			this.queuedEntryIds.set(message, entryId);
+			this.pendingQueueEntries.set(entryId, { runId, queue, message });
+			if (queue === "steer") this.agent.steer(message);
+			else this.agent.followUp(message);
 		});
-		await flushSession(this.session);
-		if (this.abortRequested || this.activeRunId !== runId) {
-			await this.cancelQueueEntry(runId, entryId);
-			return;
-		}
-		this.queuedEntryIds.set(message, entryId);
-		this.pendingQueueEntries.set(entryId, { runId });
-		if (queue === "steer") this.agent.steer(message);
-		else this.agent.followUp(message);
+	}
+
+	private serializeQueueMutation<T>(mutation: () => Promise<T>): Promise<T> {
+		const result = this.queueMutationTail.then(mutation, mutation);
+		this.queueMutationTail = result.then(
+			() => undefined,
+			() => undefined,
+		);
+		return result;
 	}
 
 	private assertCanStart(): void {
@@ -1061,10 +1337,12 @@ export class PiAgentDriver {
 			lane: "main",
 			runId,
 		});
-		for (const [entryId, pending] of [...this.pendingQueueEntries]) {
-			if (pending.runId === runId) await this.cancelQueueEntry(runId, entryId);
-		}
 		await flushSession(this.session);
+		await this.serializeQueueMutation(async () => {
+			for (const [entryId, pending] of [...this.pendingQueueEntries]) {
+				if (pending.runId === runId) await this.cancelQueueEntry(runId, entryId);
+			}
+		});
 	}
 
 	private async resumeToolBatch(operation: OperationStartedRecord): Promise<void> {
@@ -1179,7 +1457,11 @@ export class PiAgentDriver {
 			}
 			const message = normalizeQueuedMessage(record.target.message);
 			this.queuedEntryIds.set(message, record.target.id);
-			this.pendingQueueEntries.set(record.target.id, { runId: operation.id });
+			this.pendingQueueEntries.set(record.target.id, {
+				runId: operation.id,
+				queue: record.queue,
+				message,
+			});
 			if (record.queue === "steer") this.agent.steer(message);
 			else this.agent.followUp(message);
 		}

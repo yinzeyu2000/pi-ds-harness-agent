@@ -48,6 +48,7 @@ import {
 	subscribeLegacyExtensionEvents,
 	transformLegacyExtensionMessageEnd,
 } from "./extensions/index.ts";
+import { loadPromptTemplates, type PromptTemplate } from "./prompt-templates.ts";
 import { formatSkillsForPrompt, loadSkills, type Skill } from "./skills.ts";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.ts";
 import { bashToolSystemPromptContribution } from "./tools/bash.ts";
@@ -83,12 +84,16 @@ export interface CreateCodingRuntimeOptions
 	cwd: string;
 	sessionsRoot: string;
 	sessionId?: string;
+	parentSessionId?: string;
 	tools?: readonly AgentTool[];
 	toolNames?: readonly ToolName[];
 	toolOptions?: ToolsOptions;
 	skills?: readonly Skill[];
 	skillPaths?: readonly string[];
 	includeDefaultSkills?: boolean;
+	promptTemplates?: readonly PromptTemplate[];
+	promptTemplatePaths?: readonly string[];
+	includeDefaultPromptTemplates?: boolean;
 	projectTrusted?: boolean;
 	agentDir?: string;
 	compaction: DriverCompactionService;
@@ -108,20 +113,25 @@ export interface CodingRuntime extends MinimalRuntime {
 	sessionPath: string;
 	toolNames: readonly string[];
 	skills: readonly Skill[];
+	promptTemplates: readonly PromptTemplate[];
 	resourceDiagnostics: readonly ResourceDiagnostic[];
 	legacyExtensionSet: LegacyExtensionSetContribution;
 	legacyCommands: readonly CodingRuntimeCommand[];
 	legacyExtensionErrors: readonly ExtensionError[];
 	flushLegacyActions(): Promise<void>;
+	listSessions(options?: { cwd?: string }): Promise<JsonlSessionMetadata[]>;
 	forkSession(options?: { id?: string; entryId?: string; position?: "before" | "at" }): Promise<JsonlSessionMetadata>;
 }
 
 export async function createCodingRuntime(options: CreateCodingRuntimeOptions): Promise<CodingRuntime> {
 	if (options.tools && options.toolNames) throw new Error("tools cannot be combined with toolNames");
 	if (options.skills && options.skillPaths) throw new Error("skills cannot be combined with skillPaths");
+	if (options.promptTemplates && options.promptTemplatePaths) {
+		throw new Error("promptTemplates cannot be combined with promptTemplatePaths");
+	}
 	const env = new NodeExecutionEnv({ cwd: options.cwd });
 	const repo = new JsonlSessionRepo({ fs: env, sessionsRoot: options.sessionsRoot });
-	const session = await openOrCreateSession(repo, options.cwd, options.sessionId);
+	const session = await openOrCreateSession(repo, options.cwd, options.sessionId, options.parentSessionId);
 	const selectedToolNames = options.toolNames ?? (options.tools ? [] : DEFAULT_CODING_TOOL_NAMES);
 	const tools = options.tools
 		? [...options.tools]
@@ -136,6 +146,7 @@ export async function createCodingRuntime(options: CreateCodingRuntimeOptions): 
 				includeDefaults: options.includeDefaultSkills ?? true,
 				includeProjectDefaults: options.projectTrusted ?? true,
 			});
+	const loadedPromptTemplates = resolvePromptTemplates(options);
 	const codingApprovalPlugin = createCodingApprovalPlugin(options.approval ?? new HeadlessApprovalService<unknown>());
 	const codingToolsPlugin = createCodingToolsPlugin(toRegistrations(tools, options));
 	const codingSkillsPlugin = createCodingSkillsPlugin(loadedSkills.skills);
@@ -163,12 +174,16 @@ export async function createCodingRuntime(options: CreateCodingRuntimeOptions): 
 		cwd,
 		sessionsRoot: _sessionsRoot,
 		sessionId: _sessionId,
+		parentSessionId: _parentSessionId,
 		tools: _tools,
 		toolNames: _toolNames,
 		toolOptions: _toolOptions,
 		skills: _skills,
 		skillPaths: _skillPaths,
 		includeDefaultSkills: _includeDefaultSkills,
+		promptTemplates: _promptTemplates,
+		promptTemplatePaths: _promptTemplatePaths,
+		includeDefaultPromptTemplates: _includeDefaultPromptTemplates,
 		projectTrusted: _projectTrusted,
 		agentDir: _agentDir,
 		compaction: _compaction,
@@ -235,11 +250,13 @@ export async function createCodingRuntime(options: CreateCodingRuntimeOptions): 
 			return runtime.driver.toolNames;
 		},
 		skills: Object.freeze([...loadedSkills.skills]),
-		resourceDiagnostics: Object.freeze([...loadedSkills.diagnostics]),
+		promptTemplates: Object.freeze([...loadedPromptTemplates.templates]),
+		resourceDiagnostics: Object.freeze([...loadedSkills.diagnostics, ...loadedPromptTemplates.diagnostics]),
 		legacyExtensionSet,
 		legacyCommands: Object.freeze(legacyCommands),
 		legacyExtensionErrors,
 		flushLegacyActions: () => legacyRuntimeBinding.flush(),
+		listSessions: (listOptions = { cwd }) => repo.list(listOptions),
 		async forkSession(forkOptions = {}) {
 			if (!runtime.driver.isIdle()) throw new Error("Cannot fork a Session while the Agent Driver is active");
 			const recovery = await runtime.driver.getRecoveryState();
@@ -260,6 +277,43 @@ export async function createCodingRuntime(options: CreateCodingRuntimeOptions): 
 			await runtime.dispose();
 		},
 	};
+}
+
+function resolvePromptTemplates(options: CreateCodingRuntimeOptions): {
+	templates: PromptTemplate[];
+	diagnostics: ResourceDiagnostic[];
+} {
+	const prompts = options.promptTemplates
+		? [...options.promptTemplates]
+		: loadPromptTemplates({
+				cwd: options.cwd,
+				agentDir: options.agentDir ?? getAgentDir(),
+				promptPaths: [...(options.promptTemplatePaths ?? [])],
+				includeDefaults: options.includeDefaultPromptTemplates ?? false,
+				includeProjectDefaults:
+					(options.includeDefaultPromptTemplates ?? false) && (options.projectTrusted ?? true),
+			});
+	const unique = new Map<string, PromptTemplate>();
+	const diagnostics: ResourceDiagnostic[] = [];
+	for (const prompt of prompts) {
+		const existing = unique.get(prompt.name);
+		if (!existing) {
+			unique.set(prompt.name, prompt);
+			continue;
+		}
+		diagnostics.push({
+			type: "collision",
+			message: `name "/${prompt.name}" collision`,
+			path: prompt.filePath,
+			collision: {
+				resourceType: "prompt",
+				name: prompt.name,
+				winnerPath: existing.filePath,
+				loserPath: prompt.filePath,
+			},
+		});
+	}
+	return { templates: [...unique.values()], diagnostics };
 }
 
 function applyLegacyExtensionFlagValues(
@@ -515,7 +569,8 @@ async function openOrCreateSession(
 	repo: JsonlSessionRepo,
 	cwd: string,
 	sessionId: string | undefined,
+	parentSessionId: string | undefined,
 ): Promise<Session<JsonlSessionMetadata>> {
 	const existing = sessionId ? (await repo.list({ cwd })).find((metadata) => metadata.id === sessionId) : undefined;
-	return existing ? repo.open(existing) : repo.create({ cwd, id: sessionId });
+	return existing ? repo.open(existing) : repo.create({ cwd, id: sessionId, parentSessionId });
 }

@@ -4,7 +4,7 @@ import type { CodingRuntime } from "./coding-runtime.ts";
 
 export interface CodingRuntimeSnapshot {
 	profileId: string;
-	session: { id: string; path: string; name?: string };
+	session: { id: string; cwd: string; path: string; name?: string };
 	toolNames: readonly string[];
 	skillNames: readonly string[];
 	model: { provider: string; id: string; name: string };
@@ -95,7 +95,12 @@ export async function readCodingRuntimeSnapshot(runtime: CodingRuntime): Promise
 	]);
 	return {
 		profileId: runtime.profile.id,
-		session: { id: runtime.sessionId, path: runtime.sessionPath, ...(name === undefined ? {} : { name }) },
+		session: {
+			id: runtime.sessionId,
+			cwd: runtime.cwd,
+			path: runtime.sessionPath,
+			...(name === undefined ? {} : { name }),
+		},
 		toolNames: [...runtime.toolNames],
 		skillNames: runtime.skills.map((skill) => skill.name),
 		model: {

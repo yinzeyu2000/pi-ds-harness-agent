@@ -1,4 +1,9 @@
-import { type CompactionSettings, compact, type ThinkingLevel } from "@earendil-works/pi-agent-core";
+import {
+	type CompactionSettings,
+	compact,
+	generateBranchSummary,
+	type ThinkingLevel,
+} from "@earendil-works/pi-agent-core";
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import type { DriverCompactionService } from "@pi-ds/harness-runtime";
 import { type CodingRuntime, type CreateCodingRuntimeOptions, createCodingRuntime } from "./coding-runtime.ts";
@@ -17,11 +22,21 @@ export function createModelCompactionService(options: CreateModelCompactionServi
 			const result = await compact(
 				preparation,
 				options.models,
-				options.model,
+				request.model ?? options.model,
 				request.customInstructions,
 				request.signal,
-				options.thinkingLevel,
+				request.thinkingLevel ?? options.thinkingLevel,
 			);
+			if (!result.ok) throw result.error;
+			return result.value;
+		},
+		async summarizeBranch(entries, request) {
+			const result = await generateBranchSummary(entries, {
+				models: options.models,
+				model: request.model,
+				signal: request.signal,
+				customInstructions: request.customInstructions,
+			});
 			if (!result.ok) throw result.error;
 			return result.value;
 		},

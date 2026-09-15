@@ -183,6 +183,8 @@ export interface LoadPromptTemplatesOptions {
 	promptPaths: string[];
 	/** Include default prompt directories. */
 	includeDefaults: boolean;
+	/** Include the project-local default directory. Defaults to includeDefaults. */
+	includeProjectDefaults?: boolean;
 }
 
 /**
@@ -234,6 +236,8 @@ export function loadPromptTemplates(options: LoadPromptTemplatesOptions): Prompt
 
 	if (includeDefaults) {
 		templates.push(...loadTemplatesFromDir(globalPromptsDir, getSourceInfo));
+	}
+	if (options.includeProjectDefaults ?? includeDefaults) {
 		templates.push(...loadTemplatesFromDir(projectPromptsDir, getSourceInfo));
 	}
 

@@ -13,7 +13,12 @@ import { type AssistantMessage, createAssistantMessageEventStream } from "@earen
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { createMinimalRuntime } from "../src/minimal-runtime.ts";
-import { PiAgentDriver, PiAgentRecoveryError, REQUEST_CONFIGURATION_CUSTOM_TYPE } from "../src/pi-agent-driver.ts";
+import {
+	type DriverCompactionService,
+	PiAgentDriver,
+	PiAgentRecoveryError,
+	REQUEST_CONFIGURATION_CUSTOM_TYPE,
+} from "../src/pi-agent-driver.ts";
 
 const tempDirectories: string[] = [];
 
@@ -104,11 +109,210 @@ async function reopen(repo: JsonlSessionRepo, metadata: JsonlSessionMetadata): P
 	return repo.open(metadata);
 }
 
+function navigationService(onSummarize: (entries: readonly AgentMessage[]) => void): DriverCompactionService {
+	return {
+		settings: { enabled: false, reserveTokens: 100, keepRecentTokens: 0 },
+		execute: async () => {
+			throw new Error("not used");
+		},
+		summarizeBranch: async (entries) => {
+			onSummarize(entries.flatMap((entry) => (entry.type === "message" ? [entry.message] : [])));
+			return {
+				summary: "Recovered abandoned branch",
+				readFiles: ["read.ts"],
+				modifiedFiles: ["edited.ts"],
+			};
+		},
+	};
+}
+
 afterEach(() => {
 	while (tempDirectories.length > 0) rmSync(tempDirectories.pop()!, { recursive: true, force: true });
 });
 
 describe("PiAgentDriver JSONL recovery", () => {
+	it("resumes summarized navigation after its durable intent without losing the old branch", async () => {
+		const { cwd, repo } = createRepository();
+		const session = await repo.create({ id: "navigation-intent", cwd });
+		const targetId = await session.appendMessage(userMessage("common target"));
+		const sourceLeafId = await session.appendMessage(userMessage("abandoned work"));
+		await session.appendRecord({
+			type: "operation_started",
+			id: "navigation-run",
+			lane: "main",
+			sourceLeafId,
+			intent: {
+				kind: "navigation",
+				targetId,
+				summarize: true,
+				customInstructions: "preserve decisions",
+				summaryEntryId: "navigation-summary",
+			},
+		});
+		const reopened = await reopen(repo, await session.getMetadata());
+		let summarizedMessages: readonly AgentMessage[] = [];
+		const driver = await PiAgentDriver.create({
+			session: reopened,
+			streamFn: responseStream("unused"),
+			compaction: navigationService((messages) => {
+				summarizedMessages = messages;
+			}),
+		});
+
+		expect(await driver.getRecoveryState()).toEqual({
+			status: "resumable",
+			runId: "navigation-run",
+			point: "navigation",
+		});
+		await driver.resume();
+
+		expect(summarizedMessages).toHaveLength(1);
+		expect(summarizedMessages[0]).toMatchObject({ role: "user", content: "abandoned work" });
+		expect(await reopened.getEntry("navigation-summary")).toMatchObject({
+			type: "branch_summary",
+			parentId: targetId,
+			fromId: sourceLeafId,
+			summary: "Recovered abandoned branch",
+			details: { readFiles: ["read.ts"], modifiedFiles: ["edited.ts"] },
+		});
+		expect(await reopened.findOpenOperations("main")).toEqual([]);
+		expect((await reopened.findRecords({ type: "operation_finished" }))[0]?.outcome).toBe("completed");
+		await driver.dispose();
+	});
+
+	it("settles a navigation summary committed before its terminal without summarizing twice", async () => {
+		const { cwd, repo } = createRepository();
+		const session = await repo.create({ id: "navigation-summary-tail", cwd });
+		const targetId = await session.appendMessage(userMessage("target"));
+		const sourceLeafId = await session.appendMessage(userMessage("old branch"));
+		await session.appendRecord({
+			type: "operation_started",
+			id: "navigation-summary-tail-run",
+			lane: "main",
+			sourceLeafId,
+			intent: {
+				kind: "navigation",
+				targetId,
+				summarize: true,
+				summaryEntryId: "durable-navigation-summary",
+			},
+		});
+		await session.moveLane("main", targetId);
+		await session.appendEntry(
+			{
+				type: "branch_summary",
+				id: "durable-navigation-summary",
+				fromId: sourceLeafId,
+				summary: "already durable",
+			},
+			"main",
+		);
+		const reopened = await reopen(repo, await session.getMetadata());
+		let summaryCalls = 0;
+		const driver = await PiAgentDriver.create({
+			session: reopened,
+			streamFn: responseStream("unused"),
+			compaction: navigationService(() => summaryCalls++),
+		});
+
+		expect(await driver.getRecoveryState()).toEqual({
+			status: "settleable",
+			runId: "navigation-summary-tail-run",
+			outcome: "completed",
+		});
+		await driver.resume();
+
+		expect(summaryCalls).toBe(0);
+		expect(await reopened.findOpenOperations("main")).toEqual([]);
+		expect(await reopened.findEntries({ type: "branch_summary" })).toHaveLength(1);
+		await driver.dispose();
+	});
+
+	it("settles a durable compaction result without generating the summary twice", async () => {
+		const { cwd, repo } = createRepository();
+		const session = await repo.create({ id: "compaction-result-tail", cwd });
+		const sourceLeafId = await session.appendMessage(userMessage("source context"));
+		await session.appendRecord({
+			type: "operation_started",
+			id: "compaction-result-tail-run",
+			lane: "main",
+			sourceLeafId,
+			intent: {
+				kind: "compaction",
+				customInstructions: "preserve decisions",
+				resultEntryId: "durable-compaction-result",
+			},
+		});
+		await session.appendRecord({
+			type: "step_attempt",
+			id: "compaction-attempt",
+			lane: "main",
+			runId: "compaction-result-tail-run",
+			step: "compaction",
+			attempt: 1,
+			resultEntryId: "durable-compaction-result",
+			compactionReason: "manual",
+		});
+		await session.appendEntry(
+			{
+				type: "compaction",
+				id: "durable-compaction-result",
+				summary: "already durable",
+				retainedTail: [],
+				tokensBefore: 12,
+			},
+			"main",
+		);
+		const reopened = await reopen(repo, await session.getMetadata());
+		let requestCount = 0;
+		const driver = await PiAgentDriver.create({
+			session: reopened,
+			streamFn: responseStream("unused", () => requestCount++),
+		});
+
+		expect(await driver.getRecoveryState()).toEqual({
+			status: "settleable",
+			runId: "compaction-result-tail-run",
+			outcome: "completed",
+		});
+		await driver.resume();
+
+		expect(requestCount).toBe(0);
+		expect(await reopened.findOpenOperations("main")).toEqual([]);
+		expect(await reopened.findEntries({ type: "compaction" })).toHaveLength(1);
+		expect((await reopened.findRecords({ type: "operation_finished" }))[0]?.outcome).toBe("completed");
+		await driver.dispose();
+	});
+
+	it("does not retry compaction before its result is durable", async () => {
+		const { cwd, repo } = createRepository();
+		const session = await repo.create({ id: "compaction-missing-result", cwd });
+		const sourceLeafId = await session.appendMessage(userMessage("source context"));
+		await session.appendRecord({
+			type: "operation_started",
+			id: "compaction-missing-result-run",
+			lane: "main",
+			sourceLeafId,
+			intent: { kind: "compaction", resultEntryId: "missing-compaction-result" },
+		});
+		const reopened = await reopen(repo, await session.getMetadata());
+		let requestCount = 0;
+		const driver = await PiAgentDriver.create({
+			session: reopened,
+			streamFn: responseStream("unused", () => requestCount++),
+		});
+
+		expect(await driver.getRecoveryState()).toMatchObject({
+			status: "blocked",
+			runId: "compaction-missing-result-run",
+			code: "unsupported_operation",
+		});
+		await expect(driver.resume()).rejects.toMatchObject({ code: "unsupported_operation" });
+		expect(requestCount).toBe(0);
+		expect(await reopened.findOpenOperations("main")).toHaveLength(1);
+		await driver.dispose();
+	});
+
 	it("blocks recovery when the model-visible request configuration drifts", async () => {
 		const { cwd, repo } = createRepository();
 		const session = await repo.create({ id: "configuration-drift", cwd });
@@ -119,6 +323,7 @@ describe("PiAgentDriver JSONL recovery", () => {
 			session: reopened,
 			streamFn: responseStream("unexpected", () => requestCount++),
 			systemPrompt: "changed",
+			thinkingLevel: "high",
 		});
 
 		expect(await runtime.driver.getRecoveryState()).toMatchObject({

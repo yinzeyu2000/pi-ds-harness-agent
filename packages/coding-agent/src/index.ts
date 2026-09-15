@@ -384,6 +384,12 @@ export {
 export { type MainOptions, main } from "./main.ts";
 // Run modes for programmatic SDK usage
 export {
+	CodingInteractiveMode,
+	type CodingInteractiveModeOptions,
+	type CodingInteractiveSessionInfo,
+	type CodingInteractiveTreeItem,
+	type CodingInteractiveView,
+	type CodingInteractiveViewHandlers,
 	type CodingPrintModeOptions,
 	type HarnessRpcApprovalRequestEvent,
 	HarnessRpcApprovalService,
@@ -398,6 +404,8 @@ export {
 	type InteractiveModeOptions,
 	type JsonAgentSessionEvent,
 	type ModelInfo,
+	PiCodingInteractiveView,
+	type PiCodingInteractiveViewOptions,
 	type PrintModeOptions,
 	parseHarnessRpcCommand,
 	RpcClient,
